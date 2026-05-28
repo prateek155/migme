@@ -1,6 +1,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const express          = require('express');
+const cors             = require('cors');
 const fs               = require('fs');
 const path             = require('path');
 const crypto           = require('crypto');
@@ -368,9 +369,16 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const cors = require('cors');
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:8081,http://localhost:19006,https://migme.onrender.com').split(',');
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
+
+// Fallback OPTIONS handler for preflight requests from any origin
+app.options('*', (_req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.sendStatus(204);
+});
 
 app.get('/', (_req, res) => {
   const today = todayStr();
