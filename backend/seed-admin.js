@@ -30,8 +30,8 @@ if (admin.apps.length === 0) {
 }
 const authAdmin = admin.auth();
 
-const ADMIN_EMAIL = 'admin@migme.app';
-const ADMIN_PASSWORD = 'Admin@123';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 async function seedAdmin() {
   try {
