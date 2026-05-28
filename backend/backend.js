@@ -368,6 +368,10 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+const cors = require('cors');
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:8081,http://localhost:19006,https://migme.onrender.com').split(',');
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
+
 app.get('/', (_req, res) => {
   const today = todayStr();
   let orderCount = 0, emailCount = 0;
