@@ -4,3 +4,4 @@ node_modules/
 dist/
 test-export/
 *.log
+backend/serviceAccountKey.json
