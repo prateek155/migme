@@ -22,7 +22,7 @@ let isShiftStarted = true;
 const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
   const [expanded, setExpanded] = useState(false);
   const STORAGE_KEY = 'viewedOrders';
-  const getViewedSet = () => { try {  return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch { return new Set(); } };
+  const getViewedSet = () => { try { return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch { return new Set(); } };
   const [viewed, setViewed] = useState(() => getViewedSet().has(item.id));
   const assignBtnRef = useRef(null);
 
@@ -48,13 +48,25 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
 
   return (
     <View style={styles.cardContainer}>
-      <TouchableOpacity style={[styles.tableRow, expanded && styles.tableRowExpanded]} onPress={() => {  if (!expanded && !viewed) {  const set = getViewedSet(); set.add(item.id); localStorage.setItem(STORAGE_KEY, JSON.stringify([...set])); setViewed(true); } setExpanded(!expanded); }} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={[styles.tableRow, expanded && styles.tableRowExpanded]}
+        onPress={() => {
+          if (!expanded && !viewed) {
+            const set = getViewedSet();
+            set.add(item.id);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]));
+            setViewed(true);
+          }
+          setExpanded(!expanded);
+        }}
+        activeOpacity={0.85}
+      >
         <View style={{
-              width: 28, height: 28, borderRadius: 14,
-              backgroundColor: viewed ? '#94a3b8' : '#f59e0b',
-              alignItems: 'center', justifyContent: 'center',
-              marginRight: 8,
-            }}>
+          width: 28, height: 28, borderRadius: 14,
+          backgroundColor: viewed ? '#94a3b8' : '#f59e0b',
+          alignItems: 'center', justifyContent: 'center',
+          marginRight: 8,
+        }}>
           <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="#ffffff" />
         </View>
 
@@ -227,8 +239,11 @@ export default function DashboardScreen({ clientId }) {
 
   async function playAlert() {
     if (Platform.OS === 'web' && soundRef.current) {
-      soundRef.current.currentTime = 0; soundRef.current.play().catch(e => {});
-    } else if (soundRef.current) { await soundRef.current.replayAsync(); }
+      soundRef.current.currentTime = 0;
+      soundRef.current.play().catch(e => {});
+    } else if (soundRef.current) {
+      await soundRef.current.replayAsync();
+    }
   }
 
   useEffect(() => {
@@ -237,22 +252,27 @@ export default function DashboardScreen({ clientId }) {
     const unsubscribeOrders = onSnapshot(q, (snapshot) => {
       const ordersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       ordersList.sort((a, b) => {
-         const timeA = a.deliveryTime || '23:59';
-         const timeB = b.deliveryTime || '23:59';
-         return timeA.localeCompare(timeB); // ascending: earliest time first
+        const timeA = a.deliveryTime || '23:59';
+        const timeB = b.deliveryTime || '23:59';
+        return timeA.localeCompare(timeB); // ascending: earliest time first
       });
       setOrders(ordersList);
 
-      let active = 0; ordersList.forEach(o => { if (o.status === 'Active') active++; });
-      setActiveCount(active); setLoading(false);
+      let active = 0;
+      ordersList.forEach(o => { if (o.status === 'Active') active++; });
+      setActiveCount(active);
+      setLoading(false);
 
       if (isFirstLoad.current) { isFirstLoad.current = false; return; }
       snapshot.docChanges().forEach((change) => { if (change.type === 'added') playAlert(); });
     }, (error) => { Alert.alert('Sync Error', error.message); });
 
-    const unsubscribeExecs = onSnapshot(query(collection(db, 'executives'), where('clientId', '==', clientId)), (snapshot) => {
-      setExecutives(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    const unsubscribeExecs = onSnapshot(
+      query(collection(db, 'executives'), where('clientId', '==', clientId)),
+      (snapshot) => {
+        setExecutives(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }
+    );
 
     return () => { unsubscribeOrders(); unsubscribeExecs(); };
   }, [appReady]);
@@ -299,42 +319,29 @@ export default function DashboardScreen({ clientId }) {
       const trainNo = (order.trainInfo || 'N/A');
       const coachSeat = `${order.coach || '-'}/${order.seat || '-'}`;
 
-     const upiUrl = `upi://pay?pa=${clientPaymentId}&pn=${order.vendorName || 'Vendor'}&am=${amountToCollect}&cu=INR`;
+      const upiUrl = `upi://pay?pa=${clientPaymentId}&pn=${order.vendorName || 'Vendor'}&am=${amountToCollect}&cu=INR`;
 
-const qrHtml = clientPaymentId && isCOD ? `
-  <div class="center" style="margin-top:12px;">
-    
-    <img 
-      id="qrImg"
-      src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiUrl)}"
-      style="
-        width:150px;
-        height:150px;
-        object-fit:contain;
-        border:1px solid #ccc;
-        padding:4px;
-      "
-    />
-
-    <div style="
-      font-size:11px;
-      margin-top:6px;
-      font-weight:bold;
-      word-break:break-all;
-    ">
-      Scan & Pay
-    </div>
-
-    <div style="
-      font-size:10px;
-      margin-top:2px;
-      word-break:break-all;
-    ">
-      ${clientPaymentId}
-    </div>
-
-  </div>
-` : '';
+      const qrHtml = clientPaymentId && isCOD ? `
+        <div class="center" style="margin-top:12px;">
+          <img
+            id="qrImg"
+            src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiUrl)}"
+            style="
+              width:150px;
+              height:150px;
+              object-fit:contain;
+              border:1px solid #ccc;
+              padding:4px;
+            "
+          />
+          <div style="font-size:11px; margin-top:6px; font-weight:bold; word-break:break-all;">
+            Scan & Pay
+          </div>
+          <div style="font-size:10px; margin-top:2px; word-break:break-all;">
+            ${clientPaymentId}
+          </div>
+        </div>
+      ` : '';
 
       const htmlContent = `
   <html>
@@ -424,6 +431,9 @@ const qrHtml = clientPaymentId && isCOD ? `
         document.body.appendChild(iframe);
         iframe.contentDocument.write(htmlContent);
         iframe.contentDocument.close();
+
+        // ✅ FIX: Wrapped in setTimeout(200ms) so iframe fully renders before print
+        // This also ensures status update to 'Completed' always fires reliably
         const doPrint = () => {
           iframe.contentWindow.focus();
           iframe.contentWindow.print();
@@ -431,9 +441,19 @@ const qrHtml = clientPaymentId && isCOD ? `
           updateDoc(doc(db, 'orders', order.id), { status: 'Completed' }).catch(() => {});
           setTimeout(() => { document.body.removeChild(iframe); }, 1000);
         };
-        const img = iframe.contentDocument.getElementById('qrImg');
-        if (img && !img.complete) { img.onload = doPrint; img.onerror = doPrint; }
-        else { doPrint(); }
+
+        setTimeout(() => {
+          const img = iframe.contentDocument.getElementById('qrImg');
+          if (img && !img.complete) {
+            // Wait for QR image to load before printing (COD orders with QR)
+            img.onload = doPrint;
+            img.onerror = doPrint; // Print even if QR image fails to load
+          } else {
+            // No QR image (ONLINE orders) or already loaded — print immediately
+            doPrint();
+          }
+        }, 200); // ✅ KEY FIX: This 200ms delay was missing in v2, causing print & status update to fail
+
       } else {
         Alert.alert("Notice", "Printing is currently configured for Web only.");
       }
@@ -463,7 +483,10 @@ const qrHtml = clientPaymentId && isCOD ? `
 
   const handleAssignExec = async (exec) => {
     if (!selectedOrder) return;
-    await updateDoc(doc(db, 'orders', selectedOrder.id), { assignedExecutiveId: exec.id, assignedExecutiveName: exec.name });
+    await updateDoc(doc(db, 'orders', selectedOrder.id), {
+      assignedExecutiveId: exec.id,
+      assignedExecutiveName: exec.name,
+    });
     setAssignModalVisible(false);
   };
 
@@ -473,7 +496,10 @@ const qrHtml = clientPaymentId && isCOD ? `
         <View style={{ flex: 1, alignItems: 'center' }}>
           <Text style={styles.heading}>Active Orders</Text>
         </View>
-        <TouchableOpacity style={styles.settingsBtn} onPress={() => { setIsAdminUnlocked(false); setAdminPin(''); setSettingsVisible(true); }}>
+        <TouchableOpacity
+          style={styles.settingsBtn}
+          onPress={() => { setIsAdminUnlocked(false); setAdminPin(''); setSettingsVisible(true); }}
+        >
           <Ionicons name="settings-outline" size={16} color="#64748b" />
         </TouchableOpacity>
       </View>
@@ -616,21 +642,8 @@ const styles = StyleSheet.create({
   cell: { fontSize: 13, color: '#334155', fontWeight: '700' },
   badge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, borderWidth: 1, alignSelf: 'flex-start' },
   paymentTag: { fontSize: 10, fontWeight: '700', borderWidth: 1, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start', letterSpacing: 0.5 },
-
-  // ── Green assign (bicycle) button ──
-  assignBtn: {
-    width: 32, height: 32, borderRadius: 6,
-    backgroundColor: '#16a34a',
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  // ── Blue print button ──
-  printBtn: {
-    width: 32, height: 32, borderRadius: 6,
-    backgroundColor: '#3b82f6',
-    justifyContent: 'center', alignItems: 'center',
-  },
-
+  assignBtn: { width: 32, height: 32, borderRadius: 6, backgroundColor: '#16a34a', justifyContent: 'center', alignItems: 'center' },
+  printBtn: { width: 32, height: 32, borderRadius: 6, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center' },
   tickBadge: { position: 'absolute', top: -5, right: -5, width: 14, height: 14, borderRadius: 7, backgroundColor: '#0f172a', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
   emptyStateText: { fontSize: 14, color: '#94a3b8' },
