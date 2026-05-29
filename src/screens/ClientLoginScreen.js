@@ -18,7 +18,7 @@ export default function ClientLoginScreen({ onLogin }) {
     try {
       // Try Firebase Auth first
       const userCredential = await signInWithEmailAndPassword(auth, email.toLowerCase().trim(), password);
-      const uid = userCredential.user.uid; // ← Firebase Auth UID
+      const uid = userCredential.user.uid;
 
       const q = query(collection(db, 'clients'), where('email', '==', email.toLowerCase().trim()));
       const snap = await getDocs(q);
@@ -26,11 +26,17 @@ export default function ClientLoginScreen({ onLogin }) {
       const clientData = snap.docs[0].data();
       if (clientData.active === false) { Alert.alert("Account Disabled", "Please contact your administrator"); setLoading(false); return; }
 
-      onLogin({ id: snap.docs[0].id, uid: uid, ...clientData }, 'client'); // ← uid added
+      onLogin({ id: snap.docs[0].id, uid: uid, ...clientData }, 'client');
 
     } catch (authErr) {
-      // Fallback: old Firestore check for existing clients without Auth account
-      if (authErr.code === 'auth/user-not-found' || authErr.code === 'auth/invalid-credential') {
+      console.log('Auth error code:', authErr.code); // ← check console for exact code
+      if (
+        authErr.code === 'auth/user-not-found' ||
+        authErr.code === 'auth/invalid-credential' ||
+        authErr.code === 'auth/invalid-login-credentials' ||
+        authErr.code === 'auth/wrong-password' ||
+        authErr.code === 'auth/network-request-failed'
+      ) {
         try {
           const q = query(collection(db, 'clients'), where('email', '==', email.toLowerCase().trim()));
           const snap = await getDocs(q);
@@ -38,15 +44,13 @@ export default function ClientLoginScreen({ onLogin }) {
           const clientDoc = snap.docs[0];
           const clientData = clientDoc.data();
 
-          // Support both password (plain text for legacy) and passwordHash (scrypt)
           const match = clientData.password
             ? password === clientData.password
             : await verifyPasswordViaBackend(clientDoc.id, password);
           if (!match) { Alert.alert("Login Failed", "Incorrect password"); setLoading(false); return; }
           if (clientData.active === false) { Alert.alert("Account Disabled", "Please contact your administrator"); setLoading(false); return; }
 
-          // Try to migrate: create Firebase Auth user via backend
-          let uid = clientDoc.id; // default fallback uid
+          let uid = clientDoc.id;
           try {
             const createRes = await fetch(`${BACKEND_URL}/api/auth/create-user`, {
               method: 'POST',
@@ -56,24 +60,22 @@ export default function ClientLoginScreen({ onLogin }) {
             if (createRes.ok) {
               try {
                 const uc = await signInWithEmailAndPassword(auth, email.toLowerCase().trim(), password);
-                uid = uc.user.uid; // ← got real Firebase Auth UID after migration
+                uid = uc.user.uid;
               } catch (_) {}
             } else {
-              // Backend unreachable or failed — sign in anonymously so request.auth != null
               try {
                 const anonCred = await signInAnonymously(auth);
-                uid = anonCred.user.uid; // ← anonymous uid, at least auth is not null
+                uid = anonCred.user.uid;
               } catch (_) {}
             }
           } catch (_) {
-            // Backend unreachable — sign in anonymously so Firestore writes work
             try {
               const anonCred = await signInAnonymously(auth);
-              uid = anonCred.user.uid; // ← anonymous uid
+              uid = anonCred.user.uid;
             } catch (_) {}
           }
 
-          onLogin({ id: clientDoc.id, uid: uid, ...clientData }, 'client'); // ← uid added
+          onLogin({ id: clientDoc.id, uid: uid, ...clientData }, 'client');
 
         } catch (fallbackErr) {
           Alert.alert("Login Failed", fallbackErr.message);
@@ -85,7 +87,6 @@ export default function ClientLoginScreen({ onLogin }) {
     setLoading(false);
   };
 
-  // Verify password against scrypt hash via backend
   async function verifyPasswordViaBackend(uid, pwd) {
     try {
       const res = await fetch(`${BACKEND_URL}/api/auth/verify-password`, {
