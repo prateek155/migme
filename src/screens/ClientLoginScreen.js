@@ -16,20 +16,26 @@ export default function ClientLoginScreen({ onLogin }) {
     if (!email || !password) return Alert.alert("Error", "Please fill in all fields");
     setLoading(true);
     try {
-      // Try Firebase Auth first
       const userCredential = await signInWithEmailAndPassword(auth, email.toLowerCase().trim(), password);
       const uid = userCredential.user.uid;
+      console.log('✅ Firebase auth success, uid:', uid);
 
       const q = query(collection(db, 'clients'), where('email', '==', email.toLowerCase().trim()));
       const snap = await getDocs(q);
+      console.log('✅ Firestore snap empty?', snap.empty, 'size:', snap.size);
+
       if (snap.empty) { Alert.alert("Login Failed", "Client not found"); setLoading(false); return; }
       const clientData = snap.docs[0].data();
+      console.log('✅ clientData:', JSON.stringify(clientData));
+
       if (clientData.active === false) { Alert.alert("Account Disabled", "Please contact your administrator"); setLoading(false); return; }
 
-      onLogin({ id: snap.docs[0].id, uid: uid, ...clientData }, 'client');
+      const loginPayload = { id: snap.docs[0].id, uid: uid, ...clientData };
+      console.log('✅ Calling onLogin with payload:', JSON.stringify(loginPayload), 'role: client');
+      onLogin(loginPayload, 'client');
 
     } catch (authErr) {
-      console.log('Auth error code:', authErr.code); // ← check console for exact code
+      console.log('❌ Auth error code:', authErr.code, authErr.message);
       if (
         authErr.code === 'auth/user-not-found' ||
         authErr.code === 'auth/invalid-credential' ||
@@ -75,9 +81,12 @@ export default function ClientLoginScreen({ onLogin }) {
             } catch (_) {}
           }
 
-          onLogin({ id: clientDoc.id, uid: uid, ...clientData }, 'client');
+          const loginPayload = { id: clientDoc.id, uid: uid, ...clientData };
+          console.log('✅ Fallback: Calling onLogin with:', JSON.stringify(loginPayload), 'role: client');
+          onLogin(loginPayload, 'client');
 
         } catch (fallbackErr) {
+          console.log('❌ Fallback error:', fallbackErr.message);
           Alert.alert("Login Failed", fallbackErr.message);
         }
       } else {
