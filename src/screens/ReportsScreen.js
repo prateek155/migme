@@ -569,7 +569,8 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
     const q = search.toLowerCase();
     const matchPayment = paymentFilter === 'All' || normPayment(o.paymentType) === paymentFilter;
     let matchStatus = false;
-    if (statusFilter === 'All')       matchStatus = true;
+    // ✅ FIXED
+    if (statusFilter === 'All')       matchStatus = o.status === 'Completed' || o.status === 'Cancelled';
     if (statusFilter === 'Completed') matchStatus = o.status === 'Completed';
     if (statusFilter === 'Cancelled') matchStatus = o.status === 'Cancelled';
     if (statusFilter === 'Delivered') matchStatus = o.status === 'Delivered' || o.status === 'Completed';
