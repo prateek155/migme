@@ -1,0 +1,144 @@
+================================================================================
+MIGME DEPLOYMENT GUIDE - Railway + Render
+================================================================================
+
+YOUR SETUP:
+- Backend  → Railway.com
+- Admin    → Render.com (Static Site)
+- Client   → Render.com (Static Site - Separate)
+
+================================================================================
+STEP 1: DEPLOY BACKEND TO RAILWAY
+================================================================================
+
+1. Go to: https://railway.app
+2. New Project → Deploy from GitHub repo
+3. Select your migme repository
+
+Settings:
+  - Root Directory: backend
+  - Build Command: npm install
+  - Start Command: node backend.js
+
+Variables (copy from your .env file):
+  NODE_ENV=production
+  PORT=3000
+  ADMIN_API_KEY=a3f8c2e1d94b7056f2a1c8e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b2d4
+  ENCRYPTION_KEY=your_encryption_key
+  [Copy ALL other values from your .env file]
+  CORS_ORIGINS=http://localhost:3000
+
+4. Deploy and copy backend URL: ___________________________
+
+================================================================================
+STEP 2: DEPLOY ADMIN PANEL TO RENDER
+================================================================================
+
+1. Go to: https://dashboard.render.com
+2. New → Static Site
+3. Connect your GitHub repo
+
+Settings:
+  - Name: migme-admin-panel
+  - Branch: main
+  - Root Directory: (leave blank)
+  - Build Command:
+    cp App.admin.js App.js && npm install && npm run build:web:production
+  - Publish Directory: dist
+
+Environment Variables:
+  EXPO_PUBLIC_BACKEND_URL = [Your Railway URL from Step 1]
+  EXPO_PUBLIC_ADMIN_API_KEY = a3f8c2e1d94b7056f2a1c8e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b2d4
+  [Copy all EXPO_PUBLIC_FIREBASE_* values from your .env file]
+
+4. Create Static Site
+5. Copy admin URL: ___________________________
+
+================================================================================
+STEP 3: DEPLOY CLIENT APP TO RENDER
+================================================================================
+
+1. Render Dashboard → New → Static Site
+2. Connect your GitHub repo again
+
+Settings:
+  - Name: migme-client-app
+  - Branch: main
+  - Root Directory: (leave blank)
+  - Build Command:
+    cp App.client.js App.js && npm install && npm run build:web:production
+  - Publish Directory: dist
+
+Environment Variables:
+  [Same as Admin Panel - copy all environment variables]
+
+4. Create Static Site
+5. Copy client URL: ___________________________
+
+================================================================================
+STEP 4: UPDATE BACKEND CORS
+================================================================================
+
+1. Go to Railway → Your backend service → Variables
+2. Update CORS_ORIGINS:
+   CORS_ORIGINS=https://your-admin-url.onrender.com,https://your-client-url.onrender.com
+
+3. Railway will auto-redeploy
+
+================================================================================
+STEP 5: DEPLOY FIRESTORE RULES
+================================================================================
+
+firebase deploy --only firestore:rules
+
+OR manually in Firebase Console:
+1. Firestore Database → Rules
+2. Copy content from firestore.rules file
+3. Publish
+
+================================================================================
+STEP 6: TEST
+================================================================================
+
+Admin Panel:
+  1. Open admin URL
+  2. Login: admin@migme.app / Admin@123
+  3. Add test client
+
+Client App:
+  1. Open client URL
+  2. Login with test client credentials
+  3. Add category/menu item
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+403 Forbidden:
+  → Admin API keys don't match in Railway and Render
+
+CORS Error:
+  → Update CORS_ORIGINS in Railway with both Render URLs
+
+Wrong interface showing:
+  → Check build command has correct App.admin.js or App.client.js
+
+Network error:
+  → Backend URL in Render env vars is wrong
+
+================================================================================
+IMPORTANT NOTES
+================================================================================
+
+Admin API Key (use everywhere):
+  a3f8c2e1d94b7056f2a1c8e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b2d4
+
+Admin Login:
+  Email: admin@migme.app
+  Password: Admin@123
+
+Build Commands:
+  Admin: cp App.admin.js App.js && npm install && npm run build:web:production
+  Client: cp App.client.js App.js && npm install && npm run build:web:production
+
+================================================================================
