@@ -719,7 +719,7 @@ TABLE: Item | Description | Price | Quantity | Amount
 - TOTAL: use "Grand Total" field.`,
 
   rajbhog: `VENDOR: RAJBHOG
-ORDER NO: Field label is "Invoice" showing two numbers separated by "/", e.g. "RBK001699782 / 2443864301". Use the part BEFORE the slash — "RBK001699782" — as orderNo. NEVER use the number after the slash (that is an IRCTC reference).
+ORDER NO: Field label is "Invoice" showing two numbers separated by "/", e.g. "RBK001699782 / 2443864301". Use the part AFTER the slash — "2443864301" — as orderNo. NEVER use the number before the slash (that is an IRCTC reference).
 TABLE: SL# | Item | Description | Qty | Price | GST | Amount
 - Qty is its OWN column. Numbers in Description (e.g. "100g", "(4)") are NOT quantity.
 - COACH: field label is "Coach / Berth". Capture FULL value (e.g. "B6 / 8" → "B6/8"). Never split.
@@ -755,7 +755,7 @@ TABLE: Item Name | Price | Quantity | Amount
 - TOTAL: "Grand Total" field.`,
 
   rajdhani: `VENDOR: RAJDHANI
-ORDER NO: Field label is "Order" and the value starts with "#", e.g. "#321597". Strip the leading "#" and use only the digits: "321597" as orderNo. The "IRCTC Order ID" field is a secondary reference — do NOT use it as orderNo.
+ORDER NO: Field label is "IRCTC Order ID" — value is a plain integer like "2450931282". Use this as orderNo.
 FORMAT: Items table has Quantity column FIRST, then Item Name column.
 - "1 | Veg Schezwan Rice" → qty=1, name="Veg Schezwan Rice".
 - COACH: field label is "Coach / Bearth" (note spelling). Value already combined (e.g. "S7/56") — capture as-is.
@@ -1214,7 +1214,7 @@ function buildChangePayload(existingOrder, updateResult) {
 // UNSEEN mode is faster (fewer emails per cycle) but does not retry
 // incomplete emails that were previously skipped.
 // ═══════════════════════════════════════════════════════════════════════════
-const FETCH_SINCE_FIXED = new Date('2026-05-28T19:30:00.000Z'); // 01:00 IST May 29
+const FETCH_SINCE_FIXED = new Date('2026-05-29T22:30:00.000Z'); // 01:00 IST May 29
 
 function getFetchSince() {
   const rollingWindow = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
