@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 function generatePassword(length = 12) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#';
@@ -97,14 +97,17 @@ export default function AddClientScreen({ onBack }) {
     setLoading(true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/clients`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          businessName: businessName.trim(),
-          email: email.trim().toLowerCase(),
-          appPassword: appPassword.trim(),
-          password: generatedPassword,
-        }),
+           method: 'POST',
+           headers: { 
+                       'Content-Type': 'application/json',
+                       'x-admin-key': process.env.EXPO_PUBLIC_ADMIN_API_KEY || '', // ✅ Add this
+              },
+                body: JSON.stringify({
+                businessName: businessName.trim(),
+                email: email.trim().toLowerCase(),
+                appPassword: appPassword.trim(),
+                password: generatedPassword,
+           }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));

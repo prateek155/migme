@@ -5,7 +5,7 @@ import { signInWithEmailAndPassword } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../src/firebaseConfig';
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 export default function AdminLoginScreen({ onLogin }) {
   const [email, setEmail] = useState('');
