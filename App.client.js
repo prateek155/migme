@@ -109,10 +109,11 @@ export default function App() {
     loadSession();
   }, []);
 
-  const handleLogin = async (userData) => {
+  // ✅ FIXED
+  const handleLogin = async (userData, userRole) => {
     setUser(userData);
     await AsyncStorage.setItem('migme_user', JSON.stringify(userData));
-    await AsyncStorage.setItem('migme_role', 'client');
+    await AsyncStorage.setItem('migme_role', userRole || 'client');
   };
 
   const handleLogout = async () => {
