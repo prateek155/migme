@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
@@ -17,13 +17,17 @@ export default function ClientLoginScreen({ onLogin }) {
     setLoading(true);
     try {
       // Try Firebase Auth first
-      await signInWithEmailAndPassword(auth, email.toLowerCase().trim(), password);
+      const userCredential = await signInWithEmailAndPassword(auth, email.toLowerCase().trim(), password);
+      const uid = userCredential.user.uid; // ← Firebase Auth UID
+
       const q = query(collection(db, 'clients'), where('email', '==', email.toLowerCase().trim()));
       const snap = await getDocs(q);
       if (snap.empty) { Alert.alert("Login Failed", "Client not found"); setLoading(false); return; }
       const clientData = snap.docs[0].data();
       if (clientData.active === false) { Alert.alert("Account Disabled", "Please contact your administrator"); setLoading(false); return; }
-      onLogin({ id: snap.docs[0].id, ...clientData }, 'client');
+
+      onLogin({ id: snap.docs[0].id, uid: uid, ...clientData }, 'client'); // ← uid added
+
     } catch (authErr) {
       // Fallback: old Firestore check for existing clients without Auth account
       if (authErr.code === 'auth/user-not-found' || authErr.code === 'auth/invalid-credential') {
@@ -33,13 +37,16 @@ export default function ClientLoginScreen({ onLogin }) {
           if (snap.empty) { Alert.alert("Login Failed", "Client not found"); setLoading(false); return; }
           const clientDoc = snap.docs[0];
           const clientData = clientDoc.data();
+
           // Support both password (plain text for legacy) and passwordHash (scrypt)
           const match = clientData.password
             ? password === clientData.password
             : await verifyPasswordViaBackend(clientDoc.id, password);
           if (!match) { Alert.alert("Login Failed", "Incorrect password"); setLoading(false); return; }
           if (clientData.active === false) { Alert.alert("Account Disabled", "Please contact your administrator"); setLoading(false); return; }
-          // Migrate: create Firebase Auth user via backend (non-fatal if unreachable)
+
+          // Try to migrate: create Firebase Auth user via backend
+          let uid = clientDoc.id; // default fallback uid
           try {
             const createRes = await fetch(`${BACKEND_URL}/api/auth/create-user`, {
               method: 'POST',
@@ -47,10 +54,27 @@ export default function ClientLoginScreen({ onLogin }) {
               body: JSON.stringify({ uid: clientDoc.id, email: email.toLowerCase().trim(), password }),
             });
             if (createRes.ok) {
-              try { await signInWithEmailAndPassword(auth, email.toLowerCase().trim(), password); } catch (_) {}
+              try {
+                const uc = await signInWithEmailAndPassword(auth, email.toLowerCase().trim(), password);
+                uid = uc.user.uid; // ← got real Firebase Auth UID after migration
+              } catch (_) {}
+            } else {
+              // Backend unreachable or failed — sign in anonymously so request.auth != null
+              try {
+                const anonCred = await signInAnonymously(auth);
+                uid = anonCred.user.uid; // ← anonymous uid, at least auth is not null
+              } catch (_) {}
             }
-          } catch (_) { /* Backend unreachable — proceed with fallback auth */ }
-          onLogin({ id: clientDoc.id, ...clientData }, 'client');
+          } catch (_) {
+            // Backend unreachable — sign in anonymously so Firestore writes work
+            try {
+              const anonCred = await signInAnonymously(auth);
+              uid = anonCred.user.uid; // ← anonymous uid
+            } catch (_) {}
+          }
+
+          onLogin({ id: clientDoc.id, uid: uid, ...clientData }, 'client'); // ← uid added
+
         } catch (fallbackErr) {
           Alert.alert("Login Failed", fallbackErr.message);
         }

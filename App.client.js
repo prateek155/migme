@@ -197,7 +197,7 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════════════════════
   // ─── CLIENT VIEW ──────────────────────────────────────────────────────────
   // ═══════════════════════════════════════════════════════════════════════════
-  const clientId = user?.id;
+  const clientId = user?.uid || user?.id;
 
   const renderClientContent = () => {
     switch (currentScreen) {
