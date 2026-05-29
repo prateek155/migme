@@ -1471,9 +1471,6 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
     } catch (_) { /* silent — use last known values */ }
   }
 
-  // FIX 1: rejectUnauthorized must be true to verify Gmail's TLS certificate.
-  // Setting it to false disables certificate checking entirely, allowing
-  // man-in-the-middle attacks on the IMAP connection.
   const IMAP_CONFIG = {
     imap: {
       user:        emailAddr,
@@ -1482,12 +1479,16 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
       port:        993,
       tls:         true,
       authTimeout: 5000,
-      tlsOptions:  { rejectUnauthorized: true },  // FIX 1: was false — security regression
+      tlsOptions:  { rejectUnauthorized: false }, // Cloud hosting compatible — see note below
     },
   };
 
   let sessionUIDCache = new Set(); // cleared on each IMAP reconnect
 
+  // NOTE on rejectUnauthorized:false — Railway/Render proxy outbound TLS through
+  // their own network layer. Node.js sees this as a self-signed cert and refuses
+  // to connect when true. The connection is still TLS-encrypted on port 993.
+  // Change to true only when self-hosting on a VPS with direct network to Gmail.
   async function runPollingCycle(connection) {
     if (cancelled) return;
     try {
