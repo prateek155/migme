@@ -865,6 +865,35 @@ function getMissingFields(orderData) {
 // Strip non-numeric characters and parse as float safely
 const cleanFloat = (val) => parseFloat((val || 0).toString().replace(/[^\d.]/g, '')) || 0;
 
+// ── HTML to plain text converter ─────────────────────────────────────────────
+// Yatri Restro, Zoop, and some other vendors send HTML-only emails with no
+// plain-text part. Sending raw HTML tags to Bedrock causes it to return empty
+// JSON (deliveryDate: undefined, items: []) because it cannot extract data
+// from tag soup. This strips all tags and decodes entities so the AI receives
+// clean, readable text before any parsing attempt.
+function htmlToText(html) {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi,  '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/tr>/gi,  '\n')
+    .replace(/<\/th>/gi,  ' | ')
+    .replace(/<\/td>/gi,  ' | ')
+    .replace(/<[^>]+>/g,  ' ')
+    .replace(/&nbsp;/g,   ' ')
+    .replace(/&amp;/g,    '&')
+    .replace(/&lt;/g,     '<')
+    .replace(/&gt;/g,     '>')
+    .replace(/&quot;/g,   '"')
+    .replace(/&#39;/g,    "'")
+    .replace(/\r\n/g,   '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g,  '\n\n')
+    .trim();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AI — AWS BEDROCK BASE CALL
 // Supports two auth modes:
@@ -1285,7 +1314,14 @@ async function processEmail(
     }
 
     // Build full text: email body + extracted PDF attachment text
-    let fullText = parsed.text || parsed.html || '';
+    // Use plain text if available; fall back to HTML stripped of tags.
+    // Raw HTML sent to Bedrock causes "undefined" fields — Yatri Restro and
+    // Zoop send HTML-only emails that need stripping before AI parsing.
+    let fullText = parsed.text || '';
+    if (!fullText && parsed.html) {
+      fullText = htmlToText(parsed.html);
+      log(`${tag} HTML-only email — stripped to plain text (${fullText.length} chars)`);
+    }
     for (const att of (parsed.attachments || [])) {
       if (att.contentType === 'application/pdf') {
         try {
