@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: migme-client-app
+    env: static
+    buildCommand: cp App.client.js App.js && npm install && npm run build:web:production
+    staticPublishPath: ./dist
+    envVars:
+      # These will be baked into the build
+      - key: EXPO_PUBLIC_BACKEND_URL
+        sync: false
+      - key: EXPO_PUBLIC_ADMIN_API_KEY
+        value: a3f8c2e1d94b7056f2a1c8e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b2d4
+      - key: EXPO_PUBLIC_FIREBASE_API_KEY
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_PROJECT_ID
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_APP_ID
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID
+        sync: false

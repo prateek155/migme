@@ -10,6 +10,9 @@
     "build:web": "expo export --platform web",
     "build:web:client": "cp App.client.js App.js && expo export --platform web",
     "build:web:admin": "cp App.admin.js App.js && expo export --platform web",
+    "build:web:production": "cp .env.production .env && expo export --platform web",
+    "build:web:client:production": "cp App.client.js App.js && cp .env.production .env && expo export --platform web",
+    "build:web:admin:production": "cp App.admin.js App.js && cp .env.production .env && expo export --platform web",
     "seed-admin": "node backend/seed-admin.js",
     "backend": "node backend/backend.js"
   },

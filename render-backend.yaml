@@ -1,0 +1,58 @@
+services:
+  - type: web
+    name: migme-backend
+    env: node
+    region: singapore
+    plan: starter
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node backend.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+
+      # Security Keys
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ADMIN_API_KEY
+        value: a3f8c2e1d94b7056f2a1c8e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b2d4
+
+      # Firebase Config
+      - key: EXPO_PUBLIC_FIREBASE_API_KEY
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_PROJECT_ID
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: EXPO_PUBLIC_FIREBASE_APP_ID
+        sync: false
+
+      # Firebase Admin SDK
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+
+      # AWS Bedrock
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        value: ap-south-1
+      - key: AWS_BEDROCK_MODEL
+        value: qwen.qwen3-vl-235b-a22b
+
+      # CORS Origins (Update after frontend deployment)
+      - key: CORS_ORIGINS
+        sync: false
+
+      # Optional
+      - key: LOG_TOKEN
+        sync: false
