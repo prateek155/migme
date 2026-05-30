@@ -195,11 +195,11 @@ export default function HomepageScreen({ onLogin, onSignup }) {
   };
 
   return (
-    <div style={{ fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.text, background: C.bg, overflowX: "hidden" }}>
+    <div style={{ fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.text, background: C.bg, overflowX: "hidden", width: "100%", minHeight: "100vh",  marginLeft: 0, position: "relative", }}>
 
       {/* ═══ NAVBAR ═══════════════════════════════════════════════════════════ */}
       <nav style={{
-        position: "fixed", top: 0, left: 0, right: 0, zIndex: 999,
+        position: "sticky", top: 0, left: 0, right: 0, zIndex: 999, width: "100%",
         background: scrolled ? "rgba(255,255,255,0.97)" : "transparent",
         backdropFilter: scrolled ? "blur(12px)" : "none",
         boxShadow: scrolled ? "0 1px 20px rgba(0,0,0,0.08)" : "none",
@@ -589,6 +589,7 @@ export default function HomepageScreen({ onLogin, onSignup }) {
       </footer>
 
       <style>{`
+        html, body, #root { margin: 0; padding: 0; width: 100%; min-height: 100vh; }
         @media (max-width: 768px) {
           .nav-links, .nav-cta { display: none !important; }
           .hamburger { display: flex !important; }
