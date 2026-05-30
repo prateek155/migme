@@ -8,6 +8,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from './src/firebaseConfig';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import HomepageScreen from './src/screens/HomePageScreen';
 import ClientLoginScreen from './src/screens/ClientLoginScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import DailyBusinessScreen from './src/screens/DailyBusinessScreen';
@@ -27,6 +28,7 @@ const MOBILE_BP         = 768;
 export default function App() {
   const [user, setUser]                       = useState(null);
   const [loading, setLoading]                 = useState(true);
+  const [showHome, setShowHome]               = useState(true);
   const [currentScreen, setCurrentScreen]     = useState('Dashboard');
   const [dailyBizVisible, setDailyBizVisible] = useState(false);
 
@@ -118,6 +120,7 @@ export default function App() {
 
   const handleLogout = async () => {
     setUser(null);
+    setShowHome(true);
     setCurrentScreen('Dashboard');
     setMobileSidebarOpen(false);
     try { await signOut(auth); } catch (_) {}
@@ -134,8 +137,11 @@ export default function App() {
     );
   }
 
-  // ─── No user: client login ────────────────────────────────────────────────
+  // ─── No user: home page first, then login ────────────────────────────────
   if (!user) {
+    if (showHome) {
+      return <HomepageScreen onLogin={() => setShowHome(false)} onSignup={() => setShowHome(false)} />;
+    }
     return (
       <View style={{ flex: 1 }}>
         <ClientLoginScreen onLogin={handleLogin} />
