@@ -178,10 +178,6 @@ function DashboardMockup({ compact = false }) {
 }
 
 // ─── MAIN EXPORT ─────────────────────────────────────────────────────────────
-// Props:
-//   onLogin  → called when user clicks Login button  → App.js navigates to login screen
-//   onSignup → called when user clicks Signup / Get Started → App.js navigates to login screen
-
 export default function HomepageScreen({ onLogin, onSignup }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [openFaq, setOpenFaq]   = useState(0);
@@ -210,7 +206,6 @@ export default function HomepageScreen({ onLogin, onSignup }) {
         transition: "all 0.3s",
       }}>
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 28px", height: 70, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          {/* Logo */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 38, height: 38, borderRadius: 10, background: `linear-gradient(135deg, ${C.primary}, ${C.primaryLight})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <span style={{ color: "#fff", fontWeight: 900, fontSize: 18, letterSpacing: -1 }}>II</span>
@@ -218,7 +213,6 @@ export default function HomepageScreen({ onLogin, onSignup }) {
             <span style={{ fontWeight: 900, fontSize: 22, color: C.dark, letterSpacing: "-0.5px" }}>Imperiial</span>
           </div>
 
-          {/* Desktop nav links */}
           <div className="nav-links" style={{ display: "flex", gap: 36, alignItems: "center" }}>
             {NAV.map(l => (
               <button key={l} onClick={() => go(l.toLowerCase())}
@@ -229,30 +223,17 @@ export default function HomepageScreen({ onLogin, onSignup }) {
             ))}
           </div>
 
-          {/* ✅ CTA buttons — call onLogin / onSignup from App.js */}
           <div className="nav-cta" style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={onLogin}
-              style={{ background: "none", border: `1.5px solid ${C.border}`, borderRadius: 40, padding: "8px 20px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "#374151", display: "flex", alignItems: "center", gap: 6 }}
-            >
-              → Login
-            </button>
-            <button
-              onClick={onSignup}
-              style={{ background: `linear-gradient(135deg,${C.primary},${C.primaryLight})`, border: "none", borderRadius: 40, padding: "9px 22px", fontSize: 14, fontWeight: 700, cursor: "pointer", color: "#fff", display: "flex", alignItems: "center", gap: 6 }}
-            >
-              + Signup
-            </button>
+            <button onClick={onLogin} style={{ background: "none", border: `1.5px solid ${C.border}`, borderRadius: 40, padding: "8px 20px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "#374151", display: "flex", alignItems: "center", gap: 6 }}>→ Login</button>
+            <button onClick={onSignup} style={{ background: `linear-gradient(135deg,${C.primary},${C.primaryLight})`, border: "none", borderRadius: 40, padding: "9px 22px", fontSize: 14, fontWeight: 700, cursor: "pointer", color: "#fff", display: "flex", alignItems: "center", gap: 6 }}>+ Signup</button>
           </div>
 
-          {/* Hamburger */}
           <button onClick={() => setMenuOpen(!menuOpen)} className="hamburger"
             style={{ display: "none", background: "none", border: "none", cursor: "pointer", padding: 6, flexDirection: "column", gap: 5 }}>
             {[0,1,2].map(i => <span key={i} style={{ display: "block", width: 24, height: 2, background: C.dark, borderRadius: 2 }} />)}
           </button>
         </div>
 
-        {/* Mobile drawer */}
         {menuOpen && (
           <div style={{ background: "#fff", borderTop: `1px solid ${C.border}`, padding: "20px 28px" }}>
             {NAV.map(l => (
@@ -272,36 +253,23 @@ export default function HomepageScreen({ onLogin, onSignup }) {
       <section id="home" style={{ paddingTop: 100, minHeight: "100vh", background: `linear-gradient(160deg, ${C.bgLight} 0%, #fff 55%, #F0FDF9 100%)`, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: -80, right: -80, width: 400, height: 400, borderRadius: "50%", background: `radial-gradient(circle, ${C.primary}18, transparent 70%)`, pointerEvents: "none" }} />
         <div style={{ position: "absolute", bottom: 60, left: -60, width: 280, height: 280, borderRadius: "50%", background: `radial-gradient(circle, ${C.accent}14, transparent 70%)`, pointerEvents: "none" }} />
-
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "60px 28px 80px", display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: 56, alignItems: "center" }}>
           <div>
             <Pill style={{ marginBottom: 20 }}>🚂 Train Food Delivery Management</Pill>
             <h1 style={{ fontSize: "clamp(36px,5vw,62px)", fontWeight: 900, lineHeight: 1.1, margin: "0 0 10px", color: C.dark, letterSpacing: "-1.5px" }}>Imperiial</h1>
-            <h2 style={{ fontSize: "clamp(18px,2.5vw,26px)", fontWeight: 700, color: C.primary, margin: "0 0 20px", lineHeight: 1.3 }}>
-              Automate Your Train Food Delivery Business With Imperiial
-            </h2>
-            <p style={{ fontSize: 17, color: C.textMuted, lineHeight: 1.75, marginBottom: 36, maxWidth: 480 }}>
-              Automatic Billing And Monthly Settlement System For Your Train Food Delivery Business. One platform — all vendors, all orders, all insights.
-            </p>
+            <h2 style={{ fontSize: "clamp(18px,2.5vw,26px)", fontWeight: 700, color: C.primary, margin: "0 0 20px", lineHeight: 1.3 }}>Automate Your Train Food Delivery Business With Imperiial</h2>
+            <p style={{ fontSize: 17, color: C.textMuted, lineHeight: 1.75, marginBottom: 36, maxWidth: 480 }}>Automatic Billing And Monthly Settlement System For Your Train Food Delivery Business. One platform — all vendors, all orders, all insights.</p>
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
-              {/* ✅ Get Started → goes to login */}
-              <button onClick={onSignup} style={{ background: `linear-gradient(135deg,${C.primary},${C.primaryLight})`, border: "none", borderRadius: 50, padding: "15px 36px", fontSize: 16, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: `0 6px 24px ${C.primary}44` }}>
-                Get Started Free →
-              </button>
-              <button onClick={() => go("features")} style={{ background: "#fff", border: `1.5px solid ${C.border}`, borderRadius: 50, padding: "15px 30px", fontSize: 16, fontWeight: 600, color: C.text, cursor: "pointer" }}>
-                See Features
-              </button>
+              <button onClick={onSignup} style={{ background: `linear-gradient(135deg,${C.primary},${C.primaryLight})`, border: "none", borderRadius: 50, padding: "15px 36px", fontSize: 16, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: `0 6px 24px ${C.primary}44` }}>Get Started Free →</button>
+              <button onClick={() => go("features")} style={{ background: "#fff", border: `1.5px solid ${C.border}`, borderRadius: 50, padding: "15px 30px", fontSize: 16, fontWeight: 600, color: C.text, cursor: "pointer" }}>See Features</button>
             </div>
             <p style={{ fontSize: 13, color: C.textLight }}>✅ No credit card needed &nbsp;·&nbsp; 10 days free full access</p>
           </div>
-
           <div style={{ position: "relative" }}>
             <div style={{ position: "absolute", top: -20, right: -20, width: 200, height: 200, borderRadius: "50%", background: `${C.accent}22`, zIndex: 0 }} />
             <div style={{ position: "relative", zIndex: 1 }}><DashboardMockup /></div>
           </div>
         </div>
-
-        {/* Partners strip */}
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 28px 60px" }}>
           <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 40 }}>
             <p style={{ textAlign: "center", fontSize: 12, color: C.textLight, marginBottom: 24, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1.5 }}>Integrated With All Major Train Food Vendors</p>
@@ -319,9 +287,7 @@ export default function HomepageScreen({ onLogin, onSignup }) {
         <div style={{ maxWidth: 1200, margin: "0 auto" }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 64, alignItems: "flex-start" }}>
             <div>
-              <div style={{ background: `radial-gradient(circle at center, ${C.bgLight} 0%, transparent 70%)`, borderRadius: 24, padding: 20 }}>
-                <DashboardMockup compact />
-              </div>
+              <div style={{ background: `radial-gradient(circle at center, ${C.bgLight} 0%, transparent 70%)`, borderRadius: 24, padding: 20 }}><DashboardMockup compact /></div>
             </div>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><span style={{ fontSize: 28 }}>✅</span></div>
@@ -359,7 +325,6 @@ export default function HomepageScreen({ onLogin, onSignup }) {
               ))}
             </div>
           </div>
-
           <div style={{ background: "#fff", borderRadius: 20, boxShadow: "0 12px 48px rgba(0,0,0,0.08)", border: `1px solid ${C.border}`, overflow: "hidden" }}>
             <div style={{ background: "#F9FAFB", borderBottom: `1px solid ${C.border}`, padding: "10px 14px", display: "flex", alignItems: "center", gap: 7 }}>
               <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#FF5F57", display: "inline-block" }} />
@@ -421,10 +386,7 @@ export default function HomepageScreen({ onLogin, onSignup }) {
           <div style={{ background: "#fff", borderRadius: 20, border: `1px solid ${C.border}`, padding: "32px 40px", maxWidth: 480, margin: "0 auto", boxShadow: "0 4px 24px rgba(0,0,0,0.06)" }}>
             <p style={{ fontSize: 17, color: C.textMuted, lineHeight: 1.7, marginBottom: 24 }}>Communicate better, put all your customer information in one single place, get insights and stats in a nutshell</p>
             <p style={{ fontFamily: "Georgia, serif", fontSize: 20, color: C.textMuted, marginBottom: 20, fontStyle: "italic" }}>No credit card needed</p>
-            {/* ✅ Start Now → goes to login */}
-            <button onClick={onSignup} style={{ background: C.dark, border: "none", borderRadius: 50, padding: "14px 40px", fontSize: 16, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
-              Start Now →
-            </button>
+            <button onClick={onSignup} style={{ background: C.dark, border: "none", borderRadius: 50, padding: "14px 40px", fontSize: 16, fontWeight: 700, color: "#fff", cursor: "pointer" }}>Start Now →</button>
             <p style={{ marginTop: 20, fontSize: 13, color: C.textLight }}>By registering you will get 10 days of free access to the full featured solution</p>
           </div>
         </div>
@@ -564,7 +526,6 @@ export default function HomepageScreen({ onLogin, onSignup }) {
                     ))}
                   </div>
                   <div style={{ padding: "20px 28px 28px", textAlign: "center" }}>
-                    {/* ✅ Buy now → goes to login */}
                     <button onClick={onSignup} style={{ background: p.highlight ? "#fff" : "transparent", border: p.highlight ? "none" : `2px solid ${C.primary}`, borderRadius: 50, padding: "12px 32px", fontSize: 15, fontWeight: 700, cursor: "pointer", color: p.highlight ? C.dark : C.primary, display: "inline-flex", alignItems: "center", gap: 8 }}>Buy now →</button>
                   </div>
                 </div>
@@ -627,7 +588,6 @@ export default function HomepageScreen({ onLogin, onSignup }) {
         </div>
       </footer>
 
-      {/* ═══ RESPONSIVE CSS ═══════════════════════════════════════════════════ */}
       <style>{`
         @media (max-width: 768px) {
           .nav-links, .nav-cta { display: none !important; }
