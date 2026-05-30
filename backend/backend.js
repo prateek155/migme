@@ -765,13 +765,30 @@ FORMAT: Items table has Quantity column FIRST, then Item Name column.
 - REMARK: copy the "Remarks" field if present.`,
 
   railfood: `VENDOR: RAIL FOOD / REL FOOD
-ORDER NO: Field label is "REL FOOD Ref.No" — value is a plain integer like "1029311". Use this as orderNo. If this field is missing, fall back to "IRCTC Order No".
-TABLE: Item | Price | Quantity | Total
-- Item name may include weight (e.g. "Veg Fried Rice 500gm") — keep the full name including weight.
-- VERIFY: Price × Quantity = Total for each row.
-- COACH: field label is "Coach/Seat". Value already combined (e.g. "S1/65") — capture as-is.
-- DATE: "Delivery Date & Time: 5/6/2026 & 22:37" → deliveryDate=YYYY-MM-DD (M/D/YYYY format), deliveryTime=HH:MM.
-- PAYMENT: "COD"→"COD", "PRE_PAID"/"Online"→"Prepaid".`,
+ORDER NO: Field label is "REL FOOD Ref.No" — value is a plain integer like "1049158". 
+Use this as orderNo. If missing, fall back to "IRCTC Order No".
+
+TABLE STRUCTURE — CRITICAL:
+Every item in REL FOOD invoices spans EXACTLY TWO lines in the extracted text:
+  Line 1 = item name only          e.g. "Butter Tawa Roti"
+  Line 2 = descriptor + 3 numbers  e.g. "1 Pcs 225 15 225"
+                                    or   "300gm 150 1 150"
+                                    or   "500gm 254 2 254"
+
+The 3 numbers on Line 2 always map to: Price | Quantity | Total
+The descriptor ("1 Pcs", "300gm", "500gm") is part of the item name — NEVER a quantity.
+
+So you must PAIR each Line 1 with its Line 2:
+  "Butter Tawa Roti" + "1 Pcs 225 15 225"  → name="Butter Tawa Roti 1 Pcs", price=225, qty=15, total=225
+  "Plain Rice"       + "450gm 180 2 180"   → name="Plain Rice 450gm",        price=180, qty=2,  total=180
+  "Veg Fried Rice"   + "500gm 254 2 254"   → name="Veg Fried Rice 500gm",    price=254, qty=2,  total=254
+
+QUANTITY IS ALWAYS THE 2ND NUMBER ON LINE 2. Never the descriptor number.
+DO NOT verify Price × Quantity = Total. REL FOOD shows per-unit price as total — this is a known bug.
+
+- COACH: "Coach/Seat" field, already combined e.g. "M1/19" — capture as-is.
+- DATE: "Delivery Date & Time: 5/30/2026 & 21:27" → deliveryDate=YYYY-MM-DD (M/D/YYYY), deliveryTime=HH:MM.
+- PAYMENT: "COD"→"COD", "PAID"→"Prepaid", "PRE_PAID"/"Online"→"Prepaid".`,
 
   yatribhojan: `VENDOR: YATRIBHOJAN
 ORDER NO: Field label is "ORDER NO" — value is a plain integer like "57517170". Use this as orderNo.
