@@ -700,8 +700,18 @@ const VENDOR_RULES = {
 
   zoop: `VENDOR: ZOOP INDIA
 ORDER NO: Field label is "ZOOP Txn. No." — value looks like "ZO31112971597153460". Use this FULL string exactly as orderNo.
+
 TABLE: Item Name | Price | Quantity | Amount
-- Quantity is the 3rd column. It CAN be large (10, 20, etc). Never confuse Price with Quantity.
+- Item rows are single-line — no two-line splitting in this vendor.
+- Quantity is the 3rd column. It CAN be large (10, 20+). NEVER confuse Price with Quantity.
+
+MANDATORY VERIFICATION — Zoop Amount column is always mathematically correct:
+  Amount = Price × Quantity (ALWAYS true for Zoop)
+  Use this to confirm your extracted Quantity is correct.
+  e.g. Price=15, Amount=150 → Quantity must be 10 (150÷15=10)
+  If your extracted Quantity does not satisfy this formula, recalculate: Quantity = Amount ÷ Price.
+  This verification is MANDATORY for every item — do not skip it.
+
 - COACH: field label is "Coach/ Seat". Capture the FULL value normalising spaces/slash (e.g. "M2/ 74" → "M2/74"). Do NOT truncate at the slash.
 - DATE: "DD-Mon-YYYY HH:MM" → deliveryDate=YYYY-MM-DD, deliveryTime=HH:MM 24hr. Use ETA field for deliveryTime.
 - PAYMENT: "COD"→"COD", "Prepaid"→"Prepaid".
