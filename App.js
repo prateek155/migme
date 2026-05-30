@@ -148,15 +148,17 @@ export default function App() {
     );
   }
 
-  // ─── SCREEN: Homepage ─────────────────────────────────────────────────────
-  if (appScreen === SCREEN.HOME) {
-    return (
+ // ─── SCREEN: Homepage ─────────────────────────────────────────────────────
+if (appScreen === SCREEN.HOME) {
+  return (
+    <View style={styles.fullScreen}>
       <HomepageScreen
-        onLogin={() => setAppScreen(SCREEN.LOGIN)}     // Login button
-        onSignup={() => setAppScreen(SCREEN.LOGIN)}    // Signup / Get Started button
+        onLogin={() => setAppScreen(SCREEN.LOGIN)}
+        onSignup={() => setAppScreen(SCREEN.LOGIN)}
       />
-    );
-  }
+    </View>
+  );
+}
 
   // ─── SCREEN: Login ────────────────────────────────────────────────────────
   if (appScreen === SCREEN.LOGIN) {
@@ -319,6 +321,13 @@ const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1, backgroundColor: '#f8fafc',
     justifyContent: 'center', alignItems: 'center',
+  },
+
+  // ── Full screen wrapper for homepage (no sidebar) ─────────────────────────
+  fullScreen: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    ...(Platform.OS === 'web' ? { height: '100vh', overflow: 'auto' } : {}),
   },
 
   // Back-to-home bar (shown above login screen)
