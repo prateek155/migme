@@ -151,12 +151,12 @@ export default function App() {
  // ─── SCREEN: Homepage ─────────────────────────────────────────────────────
 if (appScreen === SCREEN.HOME) {
   return (
-    <View style={styles.fullScreen}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
       <HomepageScreen
         onLogin={() => setAppScreen(SCREEN.LOGIN)}
         onSignup={() => setAppScreen(SCREEN.LOGIN)}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -325,10 +325,17 @@ const styles = StyleSheet.create({
 
   // ── Full screen wrapper for homepage (no sidebar) ─────────────────────────
   fullScreen: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    ...(Platform.OS === 'web' ? { height: '100vh', overflow: 'auto' } : {}),
-  },
+  flex: 1,
+  backgroundColor: '#ffffff',
+  marginLeft: 0,
+  ...(Platform.OS === 'web' ? {
+    height: '100vh',
+    overflow: 'auto',
+    position: 'absolute',   // ← takes it fully out of flex layout
+    top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 50,
+  } : {}),
+},
 
   // Back-to-home bar (shown above login screen)
   backBar: {
