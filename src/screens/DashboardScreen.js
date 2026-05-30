@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-  SafeAreaView, Modal, Platform, Alert, TextInput, Dimensions, ScrollView
+  SafeAreaView, Modal, Platform, Alert, Dimensions, ScrollView
 } from 'react-native';
-import { collection, onSnapshot, query, where, updateDoc, doc, writeBatch, getDocs, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, updateDoc, doc, getDoc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { db } from '../firebaseConfig';
@@ -16,8 +16,6 @@ const SOUND_OPTIONS = [
 ];
 
 const screenWidth = Dimensions.get('window').width;
-
-let isShiftStarted = true;
 
 const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
   const [expanded, setExpanded] = useState(false);
@@ -92,8 +90,6 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
 
         {/* ── ACTIONS: green assign btn + blue print btn ── */}
         <View style={{ flex: 1.2, flexDirection: 'row', justifyContent: 'center', gap: 6 }}>
-
-          {/* Green assign / bicycle button */}
           <View style={{ position: 'relative' }}>
             <TouchableOpacity
               ref={assignBtnRef}
@@ -109,7 +105,6 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
             )}
           </View>
 
-          {/* Blue print button */}
           <View style={{ position: 'relative' }}>
             <TouchableOpacity
               style={styles.printBtn}
@@ -123,7 +118,6 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
               </View>
             )}
           </View>
-
         </View>
       </TouchableOpacity>
 
@@ -193,13 +187,7 @@ export default function DashboardScreen({ clientId }) {
   const [orders, setOrders] = useState([]);
   const [executives, setExecutives] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeCount, setActiveCount] = useState(0);
 
-  const [settingsVisible, setSettingsVisible] = useState(false);
-  const [adminPin, setAdminPin] = useState('');
-  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
-
-  const [statusModalVisible, setStatusModalVisible] = useState(false);
   const [assignModalVisible, setAssignModalVisible] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [dropdownPos, setDropdownPos] = useState({ x: 0, y: 0, width: 0, height: 0 });
@@ -254,13 +242,9 @@ export default function DashboardScreen({ clientId }) {
       ordersList.sort((a, b) => {
         const timeA = a.deliveryTime || '23:59';
         const timeB = b.deliveryTime || '23:59';
-        return timeA.localeCompare(timeB); // ascending: earliest time first
+        return timeA.localeCompare(timeB);
       });
       setOrders(ordersList);
-
-      let active = 0;
-      ordersList.forEach(o => { if (o.status === 'Active') active++; });
-      setActiveCount(active);
       setLoading(false);
 
       if (isFirstLoad.current) { isFirstLoad.current = false; return; }
@@ -277,22 +261,8 @@ export default function DashboardScreen({ clientId }) {
     return () => { unsubscribeOrders(); unsubscribeExecs(); };
   }, [appReady]);
 
-  const handleMassDelete = async () => {
-    if (Platform.OS === 'web') { if (!window.confirm('⚠️ Delete ALL orders?')) return; }
-    setLoading(true);
-    try {
-      const snapshot = await getDocs(query(collection(db, 'orders'), where('clientId', '==', clientId)));
-      const batch = writeBatch(db);
-      snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-      await batch.commit();
-      setSettingsVisible(false);
-    } catch (error) { Alert.alert('Error', 'Delete failed.'); }
-    setLoading(false);
-  };
-
   const handlePrint = async (order) => {
     try {
-      // Get client's payment ID for QR on bill
       let clientPaymentId = '';
       try {
         const clientSnap = await getDoc(doc(db, 'clients', clientId));
@@ -326,20 +296,10 @@ export default function DashboardScreen({ clientId }) {
           <img
             id="qrImg"
             src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiUrl)}"
-            style="
-              width:150px;
-              height:150px;
-              object-fit:contain;
-              border:1px solid #ccc;
-              padding:4px;
-            "
+            style="width:150px;height:150px;object-fit:contain;border:1px solid #ccc;padding:4px;"
           />
-          <div style="font-size:11px; margin-top:6px; font-weight:bold; word-break:break-all;">
-            Scan & Pay
-          </div>
-          <div style="font-size:10px; margin-top:2px; word-break:break-all;">
-            ${clientPaymentId}
-          </div>
+          <div style="font-size:11px; margin-top:6px; font-weight:bold; word-break:break-all;">Scan & Pay</div>
+          <div style="font-size:10px; margin-top:2px; word-break:break-all;">${clientPaymentId}</div>
         </div>
       ` : '';
 
@@ -432,8 +392,6 @@ export default function DashboardScreen({ clientId }) {
         iframe.contentDocument.write(htmlContent);
         iframe.contentDocument.close();
 
-        // ✅ FIX: Wrapped in setTimeout(200ms) so iframe fully renders before print
-        // This also ensures status update to 'Completed' always fires reliably
         const doPrint = () => {
           iframe.contentWindow.focus();
           iframe.contentWindow.print();
@@ -445,14 +403,12 @@ export default function DashboardScreen({ clientId }) {
         setTimeout(() => {
           const img = iframe.contentDocument.getElementById('qrImg');
           if (img && !img.complete) {
-            // Wait for QR image to load before printing (COD orders with QR)
             img.onload = doPrint;
-            img.onerror = doPrint; // Print even if QR image fails to load
+            img.onerror = doPrint;
           } else {
-            // No QR image (ONLINE orders) or already loaded — print immediately
             doPrint();
           }
-        }, 200); // ✅ KEY FIX: This 200ms delay was missing in v2, causing print & status update to fail
+        }, 200);
 
       } else {
         Alert.alert("Notice", "Printing is currently configured for Web only.");
@@ -463,22 +419,10 @@ export default function DashboardScreen({ clientId }) {
     }
   };
 
-  const openStatusModal = (order, pos) => {
-    setSelectedOrder(order);
-    setDropdownPos(pos);
-    setStatusModalVisible(true);
-  };
-
   const openAssignModal = (order, pos) => {
     setSelectedOrder(order);
     setDropdownPos(pos);
     setAssignModalVisible(true);
-  };
-
-  const handleUpdateStatus = async (newStatus) => {
-    if (!selectedOrder) return;
-    await updateDoc(doc(db, 'orders', selectedOrder.id), { status: newStatus });
-    setStatusModalVisible(false);
   };
 
   const handleAssignExec = async (exec) => {
@@ -493,15 +437,7 @@ export default function DashboardScreen({ clientId }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.topBar}>
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={styles.heading}>Active Orders</Text>
-        </View>
-        <TouchableOpacity
-          style={styles.settingsBtn}
-          onPress={() => { setIsAdminUnlocked(false); setAdminPin(''); setSettingsVisible(true); }}
-        >
-          <Ionicons name="settings-outline" size={16} color="#64748b" />
-        </TouchableOpacity>
+        <Text style={styles.heading}>Active Orders</Text>
       </View>
 
       <View style={styles.tableContainer}>
@@ -542,6 +478,7 @@ export default function DashboardScreen({ clientId }) {
         )}
       </View>
 
+      {/* Assign Executive Modal */}
       <Modal visible={assignModalVisible} transparent animationType="fade">
         <TouchableOpacity
           style={styles.dropdownBackdrop}
@@ -575,64 +512,14 @@ export default function DashboardScreen({ clientId }) {
           </View>
         </TouchableOpacity>
       </Modal>
-
-      <Modal visible={settingsVisible} transparent animationType="fade" onRequestClose={() => setSettingsVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Admin Panel</Text>
-              <TouchableOpacity onPress={() => setSettingsVisible(false)}>
-                <Ionicons name="close" size={20} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-            {!isAdminUnlocked ? (
-              <View>
-                <Text style={styles.pinLabel}>Enter Admin PIN</Text>
-                <TextInput
-                  style={styles.pinInput}
-                  placeholder="• • • •"
-                  keyboardType="numeric"
-                  secureTextEntry
-                  value={adminPin}
-                  onChangeText={setAdminPin}
-                />
-                <TouchableOpacity
-                  style={styles.unlockBtn}
-                  onPress={() => adminPin === '1234' ? setIsAdminUnlocked(true) : Alert.alert('Wrong PIN')}
-                >
-                  <Text style={styles.unlockBtnText}>Unlock</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View>
-                <Text style={styles.dangerWarning}>This will permanently delete all orders from the database.</Text>
-                <TouchableOpacity style={styles.dangerBtn} onPress={handleMassDelete}>
-                  <Ionicons name="trash-outline" size={16} color="white" />
-                  <Text style={styles.dangerBtnText}>Delete Entire Database</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc', padding: 24, height: Platform.OS === 'web' ? '100vh' : '100%' },
-  lockScreen: { flex: 1, backgroundColor: '#f8fafc', justifyContent: 'center', alignItems: 'center' },
-  lockIconWrapper: { width: 80, height: 80, borderRadius: 20, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-  lockTitle: { fontSize: 28, fontWeight: '800', color: '#0f172a', letterSpacing: -0.5 },
-  lockSubtitle: { fontSize: 14, color: '#94a3b8', marginTop: 4, marginBottom: 36 },
-  startButton: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 28, paddingVertical: 14, borderRadius: 8 },
-  startText: { color: '#0f172a', fontWeight: '700', fontSize: 14, letterSpacing: 1 },
   topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   heading: { fontSize: 22, fontWeight: '800', color: '#0f172a', letterSpacing: -0.5 },
-  activeCountRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
-  activeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#16a34a' },
-  subHeading: { fontSize: 13, color: '#64748b', fontWeight: '500' },
-  settingsBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: 'white', borderWidth: 1, borderColor: '#e2e8f0', justifyContent: 'center', alignItems: 'center' },
   tableContainer: { flex: 1, backgroundColor: 'white', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden' },
   tableHeader: { flexDirection: 'row', backgroundColor: '#0f172a', paddingVertical: 12, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' },
   col: { fontSize: 10, fontWeight: '700', color: '#ffffff', letterSpacing: 0.8 },
@@ -674,19 +561,6 @@ const styles = StyleSheet.create({
   dropdownBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.15)' },
   dropdownContainer: { position: 'absolute', backgroundColor: 'white', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0', width: 210, paddingVertical: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 16, elevation: 12 },
   dropdownTitle: { fontSize: 10, fontWeight: '700', color: '#94a3b8', letterSpacing: 0.8, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderColor: '#f1f5f9' },
-  dropdownItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 13, borderLeftWidth: 3, borderLeftColor: 'transparent' },
-  dropdownItemText: { fontSize: 13, fontWeight: '600' },
   execDropdownRow: { flexDirection: 'row', alignItems: 'center', padding: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderColor: '#f1f5f9', gap: 10 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
-  modalContainer: { backgroundColor: 'white', width: 360, borderRadius: 10, padding: 24, borderWidth: 1, borderColor: '#e2e8f0' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  modalTitle: { fontSize: 16, fontWeight: '700', color: '#0f172a' },
-  pinLabel: { fontSize: 12, fontWeight: '600', color: '#64748b', marginBottom: 8 },
-  pinInput: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 6, padding: 12, textAlign: 'center', fontSize: 18, letterSpacing: 8, marginBottom: 12, color: '#0f172a', backgroundColor: '#f8fafc' },
-  unlockBtn: { backgroundColor: '#0f172a', padding: 12, borderRadius: 6, alignItems: 'center' },
-  unlockBtnText: { color: 'white', fontWeight: '700', fontSize: 13 },
-  dangerWarning: { fontSize: 12, color: '#64748b', marginBottom: 14, lineHeight: 18 },
-  dangerBtn: { flexDirection: 'row', gap: 8, backgroundColor: '#dc2626', padding: 13, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
-  dangerBtnText: { color: 'white', fontWeight: '700', fontSize: 13 },
   execName: { fontSize: 14, fontWeight: '600', color: '#0f172a' },
 });
