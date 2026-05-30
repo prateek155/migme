@@ -81,7 +81,6 @@ const normalizeVendor = (name) => {
 };
 
 // ─── In-App Toast Notification ────────────────────────────────────────────────
-// type: 'success' | 'error' | 'info' | 'warning'
 const Toast = ({ message, type = 'info', onDismiss }) => {
   if (!message) return null;
 
@@ -170,7 +169,12 @@ const CompareResultPanel = ({ result, onClose }) => {
               <Text style={cStyles.countBadgeTxt}>{missingInVendor.length}</Text>
             </View>
           </View>
-          <ScrollView style={cStyles.colScroll} nestedScrollEnabled>
+          <ScrollView
+            style={cStyles.colScroll}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+          >
             {missingInVendor.length === 0 ? (
               <View style={cStyles.emptyCol}>
                 <Ionicons name="checkmark-done-circle-outline" size={26} color="#86efac" />
@@ -194,7 +198,7 @@ const CompareResultPanel = ({ result, onClose }) => {
           )}
         </View>
 
-        {/* RIGHT: Extra in Vendor File (not in our system) */}
+        {/* RIGHT: Extra in Vendor File */}
         <View style={[cStyles.column, { borderColor: extraInVendor.length > 0 ? '#93c5fd' : '#bbf7d0' }]}>
           <View style={[cStyles.colHeader, { backgroundColor: extraInVendor.length > 0 ? '#eff6ff' : '#f0fdf4' }]}>
             <Ionicons
@@ -209,7 +213,12 @@ const CompareResultPanel = ({ result, onClose }) => {
               <Text style={cStyles.countBadgeTxt}>{extraInVendor.length}</Text>
             </View>
           </View>
-          <ScrollView style={cStyles.colScroll} nestedScrollEnabled>
+          <ScrollView
+            style={cStyles.colScroll}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+          >
             {extraInVendor.length === 0 ? (
               <View style={cStyles.emptyCol}>
                 <Ionicons name="checkmark-done-circle-outline" size={26} color="#86efac" />
@@ -271,12 +280,8 @@ const cStyles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: '#f1f5f9',
   },
-
   columns: { flexDirection: 'row', minHeight: 200, maxHeight: 320 },
-  column: {
-    flex: 1, borderWidth: 0,
-    borderTopWidth: 3,
-  },
+  column: { flex: 1, borderWidth: 0, borderTopWidth: 3 },
   colHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 7,
     paddingVertical: 10, paddingHorizontal: 14,
@@ -288,7 +293,6 @@ const cStyles = StyleSheet.create({
     minWidth: 24, alignItems: 'center',
   },
   countBadgeTxt: { fontSize: 11, fontWeight: '800', color: 'white' },
-
   colScroll: { flex: 1, paddingVertical: 4 },
   idRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
@@ -300,10 +304,8 @@ const cStyles = StyleSheet.create({
     backgroundColor: '#dc2626', flexShrink: 0,
   },
   idText: { fontSize: 13, fontWeight: '600', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
-
   emptyCol: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28, gap: 8 },
   emptyColTxt: { fontSize: 12, color: '#64748b', textAlign: 'center', lineHeight: 17 },
-
   colFooter: {
     paddingVertical: 8, paddingHorizontal: 14,
     backgroundColor: '#fef2f2', borderTopWidth: 1, borderColor: '#fecaca',
@@ -322,9 +324,9 @@ const ExpandableOrderRow = ({ item }) => {
   const badgeTxt    = isCancelled ? '#dc2626' : (isCompleted ? '#16a34a' : '#b45309');
   const badgeBorder = isCancelled ? '#fecaca' : (isCompleted ? '#bbf7d0' : '#fde68a');
 
-  const isCOD          = normPayment(item.paymentType) === 'COD';
-  const paymentColor   = isCOD ? '#b45309' : '#0f766e';
-  const paymentLabel   = isCOD ? 'COD' : 'ONLINE';
+  const isCOD           = normPayment(item.paymentType) === 'COD';
+  const paymentColor    = isCOD ? '#b45309' : '#0f766e';
+  const paymentLabel    = isCOD ? 'COD' : 'ONLINE';
   const amountToCollect = isCOD ? (item.totalAmount || 0) : 0;
 
   return (
@@ -447,18 +449,13 @@ const ExpandableOrderRow = ({ item }) => {
 // ─── Vendor Detail View ───────────────────────────────────────────────────────
 
 const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) => {
-  const [search, setSearch]             = useState('');
+  const [search, setSearch]               = useState('');
   const [compareResult, setCompareResult] = useState(null);
   const [uploadedOrders, setUploadedOrders] = useState([]);
   const [paymentFilter, setPaymentFilter] = useState('All');
+  const [toast, setToast]                 = useState(null);
 
-  // ── In-app notification state ──
-  // { message, type: 'success'|'error'|'info'|'warning' }
-  const [toast, setToast] = useState(null);
-
-  const showToast = (message, type = 'info') => {
-    setToast({ message, type });
-  };
+  const showToast    = (message, type = 'info') => setToast({ message, type });
   const dismissToast = () => setToast(null);
 
   const PAYMENT_FILTERS = [
@@ -467,7 +464,6 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
     { label: 'Online', value: 'ONLINE', activeColor: '#0f766e' },
   ];
 
-  // ── File picker ──────────────────────────────────────────────────────────────
   const pickVendorFile = async () => {
     try {
       const res = await DocumentPicker.getDocumentAsync({
@@ -514,7 +510,7 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
       }
 
       setUploadedOrders(ids);
-      setCompareResult(null); // reset previous compare when new file is loaded
+      setCompareResult(null);
       showToast(
         `✓ ${ids.length} orders loaded from "${file.name}" — tap COMPARE to check differences.`,
         'success'
@@ -525,21 +521,18 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
     }
   };
 
-  // ── Compare ──────────────────────────────────────────────────────────────────
   const compareOrders = () => {
     if (uploadedOrders.length === 0) {
       showToast('Please upload the vendor file first before comparing.', 'warning');
       return;
     }
 
-    const systemOrders = [...new Set(orders.map(o => String(o.orderNo || '').trim()))];
+    const systemOrders         = [...new Set(orders.map(o => String(o.orderNo || '').trim()))];
     const uploadedOrdersUnique = [...new Set(uploadedOrders)];
-
-    const uploadedSet = new Set(uploadedOrdersUnique);
-    const systemSet   = new Set(systemOrders);
-
-    const missingInVendor = systemOrders.filter(id => !uploadedSet.has(id));
-    const extraInVendor   = uploadedOrdersUnique.filter(id => !systemSet.has(id));
+    const uploadedSet          = new Set(uploadedOrdersUnique);
+    const systemSet            = new Set(systemOrders);
+    const missingInVendor      = systemOrders.filter(id => !uploadedSet.has(id));
+    const extraInVendor        = uploadedOrdersUnique.filter(id => !systemSet.has(id));
 
     setCompareResult({
       missingInVendor,
@@ -566,10 +559,9 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
   const onlineCount   = allCompleted.filter(o => normPayment(o.paymentType) === 'ONLINE').length;
 
   const displayOrders = orders.filter(o => {
-    const q = search.toLowerCase();
+    const q            = search.toLowerCase();
     const matchPayment = paymentFilter === 'All' || normPayment(o.paymentType) === paymentFilter;
-    let matchStatus = false;
-    // ✅ FIXED
+    let matchStatus    = false;
     if (statusFilter === 'All')       matchStatus = o.status === 'Completed' || o.status === 'Cancelled';
     if (statusFilter === 'Completed') matchStatus = o.status === 'Completed';
     if (statusFilter === 'Cancelled') matchStatus = o.status === 'Cancelled';
@@ -629,7 +621,6 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
           <Text style={vStyles.exportTxt}>EXPORT</Text>
         </TouchableOpacity>
 
-        {/* Upload: shows file name if loaded */}
         <TouchableOpacity
           style={[vStyles.exportBtn, uploadedOrders.length > 0 && vStyles.exportBtnLoaded]}
           onPress={pickVendorFile}
@@ -645,7 +636,6 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
           </Text>
         </TouchableOpacity>
 
-        {/* Compare: highlighted when file is ready */}
         <TouchableOpacity
           style={[vStyles.exportBtn, uploadedOrders.length > 0 && vStyles.exportBtnCompare]}
           onPress={compareOrders}
@@ -672,21 +662,10 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
         </View>
       </View>
 
-      {/* ── In-app notification toast ── */}
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onDismiss={dismissToast}
-        />
-      )}
+      {toast && <Toast message={toast.message} type={toast.type} onDismiss={dismissToast} />}
 
-      {/* ── Side-by-side compare result panel ── */}
       {compareResult && (
-        <CompareResultPanel
-          result={compareResult}
-          onClose={() => setCompareResult(null)}
-        />
+        <CompareResultPanel result={compareResult} onClose={() => setCompareResult(null)} />
       )}
 
       {/* ── Order table ── */}
@@ -703,7 +682,12 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
           <Text style={[vStyles.col, { flex: 0.9 }]}>AMOUNT</Text>
         </View>
 
-        <ScrollView style={{ flex: 1 }}>
+        {/* ── Rows with hidden scrollbar ── */}
+        <ScrollView
+          style={{ flex: 1 }}
+          showsVerticalScrollIndicator={false}
+          showsHorizontalScrollIndicator={false}
+        >
           {displayOrders.length === 0 ? (
             <View style={{ paddingVertical: 48, alignItems: 'center', gap: 10 }}>
               <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
@@ -968,83 +952,66 @@ export default function ReportsScreen({ clientId }) {
   })();
 
   const exportExcel = async (vendorFilter = null) => {
-  try {
-    const rows = vendorFilter
-      ? displayOrders.filter(o => normalizeVendor(o.vendorName) === vendorFilter)
-      : displayOrders;
+    try {
+      const rows = vendorFilter
+        ? displayOrders.filter(o => normalizeVendor(o.vendorName) === vendorFilter)
+        : displayOrders;
 
-    const excelData = rows.map(o => ({
-      'Order No': o.orderNo || '',
-      'Delivery Date': fmtDateStr(o.deliveryDate),
-      'Delivery Time': o.deliveryTime || '',
-      'Vendor': o.vendorName || '',
-      'Customer': o.customerName || '',
-      'Contact': o.contactNo || '',
-      'Train': o.trainInfo || '',
-      'Coach': o.coach || '',
-      'Seat': o.seat || '',
-      'Subtotal': o.subTotal || 0,
-      'Tax': o.tax || 0,
-      'Delivery Charge': o.deliveryCharge || 0,
-      'Total Amount': o.totalAmount || 0,
-      'Payment Type': normPayment(o.paymentType),
-      'Status': o.status || '',
-    }));
+      const excelData = rows.map(o => ({
+        'Order No': o.orderNo || '',
+        'Delivery Date': fmtDateStr(o.deliveryDate),
+        'Delivery Time': o.deliveryTime || '',
+        'Vendor': o.vendorName || '',
+        'Customer': o.customerName || '',
+        'Contact': o.contactNo || '',
+        'Train': o.trainInfo || '',
+        'Coach': o.coach || '',
+        'Seat': o.seat || '',
+        'Subtotal': o.subTotal || 0,
+        'Tax': o.tax || 0,
+        'Delivery Charge': o.deliveryCharge || 0,
+        'Total Amount': o.totalAmount || 0,
+        'Payment Type': normPayment(o.paymentType),
+        'Status': o.status || '',
+      }));
 
-    // Create worksheet
-    const worksheet = XLSX.utils.json_to_sheet(excelData);
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      const workbook  = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Report');
 
-    // Create workbook
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Report');
+      const today = new Date();
+      let dateRangePart = '';
+      if (filterType === 'Today') {
+        dateRangePart = fmtDateFile(today);
+      } else if (filterType === 'Week') {
+        const from = new Date(today); from.setDate(today.getDate() - 7);
+        dateRangePart = `${fmtDateFile(from)}_to_${fmtDateFile(today)}`;
+      } else if (filterType === 'Month') {
+        const from = new Date(today); from.setDate(today.getDate() - 30);
+        dateRangePart = `${fmtDateFile(from)}_to_${fmtDateFile(today)}`;
+      } else if (filterType === 'Custom') {
+        dateRangePart = `${fmtDateFile(startDate)}_to_${fmtDateFile(endDate)}`;
+      } else {
+        dateRangePart = fmtDateFile(today);
+      }
 
-    const today = new Date();
+      const vendorPart = vendorFilter
+        ? `_${vendorFilter.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')}_`
+        : '_';
+      const filename = `Report${vendorPart}${dateRangePart}.xlsx`;
 
-    let dateRangePart = '';
-
-    if (filterType === 'Today') {
-      dateRangePart = fmtDateFile(today);
-    } else if (filterType === 'Week') {
-      const from = new Date(today);
-      from.setDate(today.getDate() - 7);
-      dateRangePart = `${fmtDateFile(from)}_to_${fmtDateFile(today)}`;
-    } else if (filterType === 'Month') {
-      const from = new Date(today);
-      from.setDate(today.getDate() - 30);
-      dateRangePart = `${fmtDateFile(from)}_to_${fmtDateFile(today)}`;
-    } else if (filterType === 'Custom') {
-      dateRangePart = `${fmtDateFile(startDate)}_to_${fmtDateFile(endDate)}`;
-    } else {
-      dateRangePart = fmtDateFile(today);
+      if (Platform.OS === 'web') {
+        XLSX.writeFile(workbook, filename);
+      } else {
+        const wbout = XLSX.write(workbook, { type: 'base64', bookType: 'xlsx' });
+        const uri   = FileSystem.documentDirectory + filename;
+        await FileSystem.writeAsStringAsync(uri, wbout, { encoding: FileSystem.EncodingType.Base64 });
+        await Sharing.shareAsync(uri);
+      }
+    } catch (error) {
+      console.log('Excel Export Error:', error);
     }
-
-    const vendorPart = vendorFilter
-      ? `_${vendorFilter.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')}_`
-      : '_';
-
-    const filename = `Report${vendorPart}${dateRangePart}.xlsx`;
-
-    if (Platform.OS === 'web') {
-      XLSX.writeFile(workbook, filename);
-    } else {
-      const wbout = XLSX.write(workbook, {
-        type: 'base64',
-        bookType: 'xlsx',
-      });
-
-      const uri = FileSystem.documentDirectory + filename;
-
-      await FileSystem.writeAsStringAsync(uri, wbout, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      await Sharing.shareAsync(uri);
-    }
-
-  } catch (error) {
-    console.log('Excel Export Error:', error);
-  }
-};
+  };
 
   const sw     = Dimensions.get('window').width;
   const PIE_SZ = Math.min(Math.floor((sw - 100) / 3.5), 240);
@@ -1225,12 +1192,14 @@ export default function ReportsScreen({ clientId }) {
         </View>
       </View>
 
+      {/* ── Main scroll (hidden scrollbar) ── */}
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={{ padding: 14, paddingBottom: 100 }}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        showsHorizontalScrollIndicator={false}
       >
-
         <View style={styles.chartCard}>
           <View style={styles.chartRow}>
             <View style={styles.piesSection}>
@@ -1257,9 +1226,9 @@ export default function ReportsScreen({ clientId }) {
             </View>
 
             <View style={styles.summaryColumn}>
-              <SummaryCard title={`Total : ${fmt(totalRevenue)}`}  subtitle={`Orders : ${completedOrders.length}`} color="#16a34a" />
-              <SummaryCard title={`COD : ${fmt(codRevenue)}`}      subtitle={`Orders : ${codCount}`}               color="#0891b2" />
-              <SummaryCard title={`Online : ${fmt(onlineRevenue)}`} subtitle={`Orders : ${onlineCount}`}           color="#7c3aed" />
+              <SummaryCard title={`Total : ${fmt(totalRevenue)}`}   subtitle={`Orders : ${completedOrders.length}`} color="#16a34a" />
+              <SummaryCard title={`COD : ${fmt(codRevenue)}`}       subtitle={`Orders : ${codCount}`}               color="#0891b2" />
+              <SummaryCard title={`Online : ${fmt(onlineRevenue)}`} subtitle={`Orders : ${onlineCount}`}            color="#7c3aed" />
             </View>
           </View>
         </View>
@@ -1378,8 +1347,8 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#dbeafe', backgroundColor: '#eff6ff',
     paddingVertical: 7, paddingHorizontal: 10, borderRadius: 6,
   },
-  dateBtnText:  { fontSize: 12, color: '#1d4ed8', fontWeight: '600' },
-  dateArrow:    { color: '#94a3b8', fontWeight: '700', fontSize: 16 },
+  dateBtnText: { fontSize: 12, color: '#1d4ed8', fontWeight: '600' },
+  dateArrow:   { color: '#94a3b8', fontWeight: '700', fontSize: 16 },
 
   scroll: { flex: 1 },
 
@@ -1466,19 +1435,13 @@ const vStyles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 7,
     backgroundColor: '#0f172a', paddingVertical: 10, paddingHorizontal: 18, borderRadius: 9,
   },
-  // Turns green when a file has been loaded successfully
-  exportBtnLoaded: {
-    backgroundColor: '#16a34a',
-  },
-  // Turns blue and pulsing-ready when file is loaded and compare can be run
-  exportBtnCompare: {
-    backgroundColor: '#2563eb',
-  },
+  exportBtnLoaded:  { backgroundColor: '#16a34a' },
+  exportBtnCompare: { backgroundColor: '#2563eb' },
   exportTxt: { color: 'white', fontWeight: '800', fontSize: 14, letterSpacing: 0.5 },
 
   summaryRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   summaryCard: { flex: 1, borderRadius: 10, paddingVertical: 16, paddingHorizontal: 18 },
-  summaryTitle: { fontSize: 15, fontWeight: '800', color: 'white', marginBottom: 4 },
+  summaryTitle:    { fontSize: 15, fontWeight: '800', color: 'white', marginBottom: 4 },
   summarySubtitle: { fontSize: 13, color: 'rgba(255,255,255,0.9)', fontWeight: '600' },
 
   tableContainer: {
