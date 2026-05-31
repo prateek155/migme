@@ -15,7 +15,9 @@
     "firebase-admin": "^13.10.0",
     "imap-simple": "^5.1.0",
     "mailparser": "^3.6.5",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "cheerio": "^1.0.0",
+    "quoted-printable": "^1.0.1"
   },
   "private": true
 }
