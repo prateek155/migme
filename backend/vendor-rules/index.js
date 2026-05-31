@@ -2,20 +2,30 @@
 
 /**
  * Vendor Rules Registry
- * ---------------------
+ * ─────────────────────
  * Each vendor file exports:
- *   matchers  — array of { match, name, type } used to identify the vendor from the sender email
- *   type      — string key used in VENDOR_RULES
- *   rule      — the AI prompt text specific to this vendor
+ *   matchers   — [{ match, name, type }]  identifies vendor from sender email
+ *   type       — string key e.g. "railfood"
+ *   rule       — AI prompt text (used for text/plain vendors OR as DOM fallback)
+ *   domConfig  — (optional) present ONLY on text/html vendors
+ *                When present, DOM parsing is used instead of AI — no rule needed at runtime.
+ *                rule is still kept as a safety fallback in case HTML part is missing.
  *
- * To add a new vendor:
- *   1. Create migme/backend/vendor-rules/myvendor.js following the same structure
- *   2. require() it below and add it to the `vendors` array
- *   That's it — VENDOR_MAP and VENDOR_RULES update automatically.
+ * HOW THE ENGINE DECIDES WHICH PATH TO USE  (in backend.js processEmail):
+ *   text/html vendor  →  domConfig exists  →  DOM parse (cheerio, 100% accurate)
+ *                         DOM returns null  →  fall back to AI rule
+ *   text/plain vendor →  no domConfig      →  AI rule only (unchanged behaviour)
  *
- * IMPORTANT: Order in the `vendors` array matters for VENDOR_MAP.
- * More specific / longer match strings must come BEFORE shorter ones
- * (e.g. "zoopindia" before "zoop", "rajdhaniorder" before "rajdhani").
+ * TO ADD A NEW text/html VENDOR:
+ *   1. Add domConfig to that vendor's file (see railfood.js as the reference)
+ *   2. require() + add to vendors array — nothing else needed
+ *
+ * TO ADD A NEW text/plain VENDOR:
+ *   1. Create vendor file with matchers + type + rule only (no domConfig)
+ *   2. require() + add to vendors array — nothing else needed
+ *
+ * ORDER MATTERS — more specific match strings before shorter ones
+ * (e.g. "zoopindia" before "zoop").
  */
 
 const railfood    = require('./railfood');
@@ -54,16 +64,15 @@ const vendors = [
 
 /**
  * VENDOR_MAP
- * Flat array of { match, name, type } entries.
- * Used by parseWithAWS() to identify the vendor from the sender email address.
- * First match wins — order is preserved from the vendors array above.
+ * Flat array of { match, name, type }.
+ * First match wins — order preserved from vendors array above.
  */
 const VENDOR_MAP = vendors.flatMap(v => v.matchers || []);
 
 /**
  * VENDOR_RULES
- * Object keyed by vendor type string.
- * Used by parseWithAWS() to inject vendor-specific instructions into the AI prompt.
+ * Keyed by vendor type → AI prompt string.
+ * Used by AI path for text/plain vendors and as DOM fallback.
  */
 const VENDOR_RULES = Object.fromEntries(
   vendors
@@ -71,4 +80,16 @@ const VENDOR_RULES = Object.fromEntries(
     .map(v => [v.type, v.rule])
 );
 
-module.exports = { VENDOR_MAP, VENDOR_RULES };
+/**
+ * VENDOR_DOM_CONFIGS
+ * Keyed by vendor type → domConfig object.
+ * Only vendors that export domConfig appear here (text/html vendors only).
+ * Built automatically — no manual registration needed.
+ */
+const VENDOR_DOM_CONFIGS = Object.fromEntries(
+  vendors
+    .filter(v => v.type && v.domConfig)
+    .map(v => [v.type, v.domConfig])
+);
+
+module.exports = { VENDOR_MAP, VENDOR_RULES, VENDOR_DOM_CONFIGS };
