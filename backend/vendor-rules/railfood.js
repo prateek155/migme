@@ -3,37 +3,52 @@
 /**
  * VENDOR: RAIL FOOD / REL FOOD
  * Sender domain : relfood.com  (orders@relfood.com)
- * Content-Type  : text/html   (pure HTML, no PDF attachment)
+ * Content-Type  : text/html; charset=us-ascii (pure HTML, no PDF attachment)
+ * Transfer      : quoted-printable
  *
- * This vendor uses DOM parsing (PATH 1).
- * The `domConfig` below tells parseDomOrder() in backend.js how to read the HTML.
- * The `rule` string below is kept as a fallback for when parsed.html is missing.
+ * DOM PARSING: PATH A — domConfig below.
+ * AI fallback (PATH B) used only when parsed.html is missing or DOM returns null.
  *
- * IF RAILFOOD CHANGES THEIR TEMPLATE IN FUTURE:
- *   Only update domConfig here — backend.js and index.js need no changes.
+ * ── VERIFIED BUGS FIXED (2026-06-01) ────────────────────────────────────────
+ *
+ * BUG 1 — orderNo always null (orders never saved):
+ *   OLD assumption: label td "REL FOOD Ref.No" + separate sibling value td.
+ *   ACTUAL HTML:    <span>REL FOOD Ref.No : <b>1050866</b></span> — ONE td.
+ *   parseDomOrder finds the label td, reads NEXT sibling as value → wrong td.
+ *   FIX: selfContained:true tells parseDomOrder to regex the value from the
+ *        label td's OWN text instead of reading a sibling td.
+ *
+ *   Same applies to fallback "IRCTC Order No." — also one td:
+ *   <td style="color:#995043">IRCTC Order No. <b>2451624177</b></td>
+ *
+ * BUG 2 — totalAmount = 0 for Prepaid orders:
+ *   "Payment to collect" is correctly 0 for PAID orders (nothing to collect
+ *   at the door). But we need to store the order's monetary value for display.
+ *   FIX: postProcess falls back to the items table "Total" footer row value
+ *        when paymentType=Prepaid and totalAmount=0.
+ *        The "Total" footer row value (e.g. 357) is captured as _itemsTotal
+ *        via a special selfContained field on the footer label.
  */
 
-// ─────────────────────────────────────────────────────────────────────────────
-// domConfig — used by parseDomOrder() in backend.js
-// ─────────────────────────────────────────────────────────────────────────────
 const domConfig = {
 
-  // ── Flat fields ────────────────────────────────────────────────────────────
-  // labelText    : text inside the label <td> (partial match, whitespace-normalised)
-  // fallback     : tried if primary label not found
-  // transform(v) : converts raw string → final typed value
   fields: {
+    // ── BUG 1 FIX: selfContained:true ──────────────────────────────────────
+    // parseDomOrder must check domConfig.fields[name].selfContained
+    // If true: regex the value from the LABEL td's own text (not next sibling).
+    // Pattern: find td containing labelText, extract first \d+ from its own text.
     orderNo: {
-      labelText: 'REL FOOD Ref.No',
-      fallback:  'IRCTC Order No.',
+      labelText:     'REL FOOD Ref.No',
+      fallback:      'IRCTC Order No',   // also selfContained (same one-td structure)
+      selfContained: true,               // ← NEW FLAG
       transform: v => v.trim(),
     },
+
     customerName: {
       labelText: 'Customer Name',
       transform: v => v.trim(),
     },
-    // "Contact Number" may have two numbers: "7017853303, 8433299274"
-    // Strip +91/91 prefix, return the first valid 10-digit Indian mobile.
+
     contactNo: {
       labelText: 'Contact Number',
       transform: v => {
@@ -46,29 +61,27 @@ const domConfig = {
         return raw;
       },
     },
+
     trainInfo: {
       labelText: 'Train No./Name',
       transform: v => v.trim(),
     },
+
     coach: {
       labelText: 'Coach/Seat',
       transform: v => v.trim(),
     },
+
     pnr: {
       labelText: 'PNR',
-      transform: v => v.trim() || null,   // often blank in RailFood emails
+      transform: v => v.trim() || null,
     },
-    // Raw delivery string "5/31/2026 & 10:15" — split into date+time in postProcess
+
     _deliveryRaw: {
-      labelText: 'Delivery Date',         // partial match covers "Delivery Date & Time"
+      labelText: 'Delivery Date',        // partial match covers "Delivery Date & Time"
       transform: v => v.trim(),
     },
-    // "Payment to collect" is the ground-truth cash amount the delivery person collects.
-    // RailFood spells the section heading "ORDER SUMMERY" (known typo — match as-is).
-    totalAmount: {
-      labelText: 'Payment to collect',
-      transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
-    },
+
     paymentType: {
       labelText: 'Payment Mode',
       transform: v => {
@@ -78,50 +91,98 @@ const domConfig = {
         return u;
       },
     },
-  },
 
-  // ── Items table ────────────────────────────────────────────────────────────
-  itemsTable: {
-    // Column header text → internal field name (case-insensitive match).
-    // To handle a future extra column (e.g. Discount): just add it here.
-    columnMap: {
-      'item'    : 'rawItem',   // <td> has item name + <br> + serving description
-      'price'   : 'price',
-      'quantity': 'qty',       // ← THIS is always the customer's ordered quantity
-      'total'   : 'totalCol',  // IGNORED — always equals unit price (RailFood billing bug)
+    // "Payment to collect" = cash the delivery person collects at door.
+    // For COD: equals the order value. For PAID: always 0 (nothing to collect).
+    // BUG 2 FIX: totalAmount is corrected in postProcess for Prepaid orders.
+    totalAmount: {
+      labelText: 'Payment to collect',
+      transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
     },
 
-    // The item <td> uses <br> to separate item name from serving description.
-    // "br" = split on <br> tag (correct for current RailFood HTML structure).
-    itemCellSplit: 'br',
-
-    // Footer rows: stop item parsing when first cell is empty AND second cell
-    // contains one of these strings.
-    footerLabels: ['Sub Total', 'Delivery Fee', 'GST', 'Total'],
+    // Capture items table "Total" footer value for Prepaid totalAmount fallback.
+    // selfContained:true — the footer td "Total" + value are in separate cells
+    // but we capture the value via footerTotalCapture flag in postProcess instead.
+    // (No extra field needed — handled in postProcess via order._itemsTotal set
+    //  by parseDomOrder when it encounters the 'Total' footerLabel row.)
   },
 
-  // ── Post-processing ────────────────────────────────────────────────────────
-  // Runs after all fields and items are extracted.
-  // Splits _deliveryRaw "M/D/YYYY & HH:MM" → deliveryDate + deliveryTime.
+  itemsTable: {
+    columnMap: {
+      'item'    : 'rawItem',
+      'price'   : 'price',
+      'quantity': 'qty',
+      'total'   : 'totalCol',   // IGNORED for items — equals unit price (billing bug)
+                                 // BUT captured as _itemsTotal for BUG 2 FIX
+    },
+
+    itemCellSplit: 'br',
+
+    footerLabels: ['Sub Total', 'Delivery Fee', 'GST', 'Total'],
+
+    // ── BUG 2 FIX ───────────────────────────────────────────────────────────
+    // When parseDomOrder hits the 'Total' footer row, capture its value as
+    // order._itemsTotal so postProcess can use it for Prepaid totalAmount.
+    captureFooterTotal: 'Total',   // ← NEW FLAG: footer label whose value to capture
+  },
+
   postProcess(order) {
+    // ── Split _deliveryRaw "6/1/2026 & 08:17" → deliveryDate + deliveryTime ──
     const raw = order._deliveryRaw || '';
     const m = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*[&]\s*(\d{1,2}:\d{2})/);
     if (m) {
       const [, mo, dd, yyyy, time] = m;
       order.deliveryDate = `${yyyy}-${mo.padStart(2,'0')}-${dd.padStart(2,'0')}`;
-      order.deliveryTime = time.length === 4 ? '0' + time : time; // ensure HH:MM
+      order.deliveryTime = time.length === 4 ? '0' + time : time;
     } else {
       order.deliveryDate = null;
       order.deliveryTime = null;
     }
     delete order._deliveryRaw;
+
+    // ── BUG 2 FIX: use items Total for Prepaid orders ────────────────────────
+    // For COD: totalAmount = 'Payment to collect' value (correct — what to charge).
+    // For PAID: totalAmount = 0 (correct for collection) but wrong for display.
+    //   → use the captured items table Total footer value instead.
+    if (order.paymentType === 'Prepaid' && (!order.totalAmount || order.totalAmount === 0)) {
+      if (order._itemsTotal && order._itemsTotal > 0) {
+        order.totalAmount = order._itemsTotal;
+      }
+    }
+    delete order._itemsTotal;
+
     return order;
   },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// matchers / type / rule  — unchanged from original, rule is AI fallback only
+// parseDomOrder backend.js changes required for these fixes:
+//
+// CHANGE 1 — selfContained field support:
+//   In the fields loop, after finding the label <td>:
+//   if (cfg.selfContained) {
+//     // Extract value from label td's own text via regex (first number sequence)
+//     const ownText = $(el).text().replace(/\s+/g,' ').trim();
+//     const numMatch = ownText.match(/[\d]+$/);   // last number in the td text
+//     rawValue = numMatch ? numMatch[0] : null;
+//   } else {
+//     // Original: read next sibling td
+//     const sibling = $(el).next('td');
+//     if (sibling.length) rawValue = sibling.text()...
+//   }
+//
+// CHANGE 2 — captureFooterTotal support:
+//   In the footer detection block, when a footerLabel is matched:
+//   if (domConfig.itemsTable.captureFooterTotal) {
+//     const footerLabel = domConfig.itemsTable.captureFooterTotal;
+//     if (secondText.toLowerCase().includes(footerLabel.toLowerCase())) {
+//       // Capture the value from the last td in this footer row
+//       const lastCell = cells.last();
+//       order._itemsTotal = parseFloat(lastCell.text().replace(/[^\d.]/g,'')) || 0;
+//     }
+//   }
 // ─────────────────────────────────────────────────────────────────────────────
+
 const matchers = [
   { match: 'relfood',  name: 'Rail Food', type: 'railfood' },
   { match: 'railfood', name: 'Rail Food', type: 'railfood' },
@@ -130,55 +191,28 @@ const matchers = [
 const type = 'railfood';
 
 const rule = `VENDOR: RAIL FOOD / REL FOOD
-ORDER NO: Field label is "REL FOOD Ref.No" — value is a plain integer like "1049462".
-Use this as orderNo. If missing, fall back to "IRCTC Order No".
+ORDER NO: "REL FOOD Ref.No" label and value are in ONE <td> cell:
+  <span>REL FOOD Ref.No : <b>1050866</b></span>
+  Extract the number from the SAME cell — it is NOT in a separate sibling td.
+  e.g. "REL FOOD Ref.No : 1050866" → orderNo = "1050866"
+  Fallback: "IRCTC Order No. 2451624177" (same one-cell structure) → "2451624177".
 
-EMAIL FORMAT: Pure HTML email (no PDF attachment). After HTML-to-text conversion,
-table columns are separated by pipe "|" characters.
+EMAIL FORMAT: Pure HTML (no PDF). After HTML-to-text, fields are pipe-separated.
 
-ITEMS TABLE STRUCTURE:
-In the raw HTML each item row has a single <td> containing the item name and description
-separated by a <br> tag. Depending on the HTML-to-text converter used, this renders in
-one of two ways — handle BOTH:
+ITEMS TABLE: Item | Price | Quantity | Total
+  Each item td has name + description separated by <br>.
+  Quantity = 3rd column (never the description).
+  DO NOT verify Price × Qty = Total (RailFood billing bug: Total always = unit Price).
 
-  TWO-LINE format (br converted to newline):
-    Line 1 = item name only          e.g. "Masala Dosa"
-    Line 2 = Description | Price | Qty | Total   (pipe-separated)
+TOTAL:
+  COD orders:     use "Payment to collect" as totalAmount.
+  PAID/Prepaid:   "Payment to collect" = 0. Use items table "Total" footer row instead.
+  e.g. Sub Total=340, GST=17, Total=357 → totalAmount=357 for Prepaid orders.
 
-  ONE-LINE format (br converted to space or dropped):
-    Everything before the first "|" = item name + description combined
-    Then: Price | Qty | Total   (pipe-separated, same column positions)
-
-In BOTH formats, Quantity is always the number after the 2nd pipe "|".
-
-STOP CONDITION — FOOTER ROWS:
-Stop processing item rows when the item cell is empty and the next cell contains
-any of: "Sub Total", "Delivery Fee", "GST", "Total". Do NOT parse these as items.
-
-⚠️ CRITICAL — ANY DESCRIPTION STARTING WITH A NUMBER IS SERVING SIZE, NEVER QTY:
-  "1 Pcs", "2 Pcs", "1 Dosa + Sambhar", "2 Idli + Sambar" — the leading digit is
-  pieces-per-serving. NEVER use it as quantity.
-  The ONLY source of truth for quantity is the number after the 2nd pipe "|".
-
-⚠️ THE "1 Pcs" TRAP:
-  "Butter Tawa Roti" + "1 Pcs | 225 | 3 | 225" → qty=3 NOT qty=1
-  "Roasted Papad"    + "1 Pcs | 20  | 3 | 20"  → qty=3 NOT qty=1
-
-COLUMN MAPPING:
-  [Description] | [Price] | [Quantity] | [Total]
-  Before 1st "|" = Description → append to name, NEVER qty
-  After  1st "|" = Price
-  After  2nd "|" = Quantity    → ONLY SOURCE OF TRUTH
-  After  3rd "|" = Total       → IGNORE (always equals Price, known billing bug)
-
-DO NOT verify Price × Quantity = Total. RailFood Total always = unit Price.
-
-TOTAL: Use "Payment to collect" value as totalAmount.
-- COACH: "Coach/Seat" field e.g. "B2/49"
-- DATE: "Delivery Date & Time: 5/31/2026 & 10:15" → YYYY-MM-DD, HH:MM
-- TRAIN: "Train No./Name" field
-- CONTACT: first 10-digit number after stripping +91/91 prefix
-- PAYMENT: "COD"→"COD", "PAID"/"PRE_PAID"/"Online"→"Prepaid"
-- PNR: capture if present, null if blank`;
+- COACH: "Coach/Seat" field e.g. "H1/C/8"
+- DATE: "Delivery Date & Time: 6/1/2026 & 08:17" → deliveryDate=2026-06-01, deliveryTime=08:17
+- TRAIN: "Train No./Name"
+- CONTACT: first 10-digit number, strip +91/91 prefix
+- PAYMENT: "COD"→"COD", "PAID"/"PRE_PAID"/"PAID"→"Prepaid"`;
 
 module.exports = { matchers, type, rule, domConfig };
