@@ -1,289 +1,145 @@
 "use strict";
 
 /**
- * VENDOR: ZOOP INDIA
- * Sender domain : zoopindia.com  (noreply@zoopindia.com)
- * Transport     : Amazon SES
- * Content-Type  : text/html; charset=utf-8 — pure HTML single part, NO text/plain part.
+ * VENDOR: DIBRAIL
+ * Sender domain : gmail.com  (dibrailcare@gmail.com)
+ * Transport     : Gmail (Google SMTP)
+ * Content-Type  : multipart/alternative (text/plain + text/html)
  * Transfer      : quoted-printable
  *
- * VERIFIED AGAINST: real .eml ZO29663100616818 (31-May-2026)
+ * VERIFIED AGAINST: real .eml Order ID #210918 (29-May-2026)
  *
- * ── HTML LAYOUT ────────────────────────────────────────────────────────────
+ * ── EMAIL STRUCTURE ────────────────────────────────────────────────────────
  *
- * IMPORTANT: Cheerio sees ONE giant nested table (the email wrapper).
- * Do NOT match tables by index — match by finding the first 4-col row
- * whose first cell text equals "ZOOP Txn. No." for order details, and
- * the first 4-col row whose cells are ["Item Name","Price","Quantity","Amount"]
- * for items.
+ * Multipart email — USE THE text/plain PART (simpler and cleaner).
+ * HTML part is structurally identical but QP-encoded with &amp; entities.
+ * Plain text part is the authoritative source for all field extraction.
  *
- * ORDER DETAILS TABLE — rows with exactly 4 cells, label+value pairs:
- *   Row 0: ["ZOOP Txn. No.", ": ZO29663100616818", "Type",          ": Prepaid"]
- *   Row 1: ["Customer Name", ": Shivani Gadge",    "Phone",         ": 9619770718"]
- *   Row 2: ["Train",         ": Mmct Duronto/ 22210","Coach/ Seat", ": M1/ 10"]
- *   Row 3: ["Restaurants Name",":(1466) Shri Krishna Food","ETA",   ": 31-May-2026 10:33"]
- *   Row 4: ["At",            ": Vadodara Jn/ BRC", "Delivery Date", ": 31-May-2026 10:33"]
+ * EXACT PLAIN TEXT STRUCTURE (after QP decode):
  *
- *   Value cells start with ": " — strip that prefix to get the actual value.
- *   e.g. ": ZO29663100616818" → "ZO29663100616818"
+ *   Dear Partner,
+ *   A new order from DIBRAIL.
  *
- * ITEMS TABLE — 4 columns: Item Name | Price | Quantity | Amount
- *   Header row cells: ["Item Name", "Price", "Quantity", "Amount"]
- *   Item rows: exactly 4 cells, NO colspan, plain numbers (no ₹ symbol).
- *   e.g. ["Poha", "60", "3", "180"] → name=Poha, price=60, qty=3, amount=180
+ *   Customer & Delivery Detail
  *
- *   Footer rows: colspan="3" on first cell + one value cell.
- *   Footer label → value:
- *     "Base Price Total"          → ₹ 180
- *     "(+) GST on food"           → ₹ 9
- *     "(+) Delivery Charge"       → ₹ 25.42
- *     "(+) GST on Delivery Charge"→ ₹ 4.58
- *     "(+) Gateway Platform Fees" → ₹ 20
- *     "(-) Discount"              → ₹ 0
- *     "Order Total"               → ₹ 239   ← use as totalAmount
- *     "(-) Paid Online"           → ₹ 239
- *     "BALANCE TO PAY"            → ₹ 0
+ *   ✅ Order ID :- #210918
+ *   ✅ Customer Name :- Jaswant
+ *   ✅ Mobile :- 7339957184, 7357909913
+ *   ✅ Station :- VADODARA (BRC)
+ *   ✅ Train :- 20626 - BGKT MAS SF EXP
+ *   ✅ Coach & Seat :- S6  - 8
+ *   ✅ Delivery Time :- 29-05-2026 16:52
  *
- * ITEM DESCRIPTION TABLE (IGNORE ENTIRELY):
- *   A separate 2-col table below items: ["Item Name", "Description"]
- *   e.g. ["Poha", "250g"] — serving size info, NOT part of order items.
- *   Detected by header row = ["Item Name","Description"] — skip this table completely.
+ *   ✅ Order Type : COD            ← NOTE: single ":" not ":-" for this field
+ *   ✅ Total Amount :- 189.00
+ *   ✅ Cash On Delivery :- 189.00
+ *
+ *   ✅ Items:
+ *   👉🏼 1-VEG MINI THALI,
+ *   .
+ *   ✅ Notes :- .
  *
  * ── KEY PARSING RULES ──────────────────────────────────────────────────────
  *
- * ORDER NO: "ZOOP Txn. No." label → full ZO... string exactly as-is (no stripping).
+ * FIELD SEPARATOR: "✅ Label :- Value" for most fields (dash after colon).
+ *   EXCEPTION: "Order Type" uses single ":" — "✅ Order Type : COD"
+ *   Strip ":-" or ":" and trim to get value.
  *
- * VALUE STRIPPING: All value cells start with ": " prefix — always strip it.
- *   e.g. ": ZO29663100616818" → "ZO29663100616818"
- *   e.g. ": M1/ 10" → "M1/ 10" → normalize to "M1/10"
+ * ORDER NO: "Order ID" field → strip "#" prefix → digits only.
+ *   e.g. "#210918" → "210918"
  *
- * COACH: "Coach/ Seat" label → value ": M1/ 10" → strip prefix → "M1/ 10"
- *   Normalize spaces around "/": "M1/ 10" → "M1/10"
+ * CONTACT: "Mobile" field → MAY contain multiple comma-separated numbers.
+ *   Always use the FIRST 10-digit Indian mobile number (starts with 6-9).
+ *   e.g. "7339957184, 7357909913" → "7339957184"
  *
- * DATE & TIME: "Delivery Date" label (Row 4, right column) — NOT "ETA".
- *   Both ETA and Delivery Date have same value: "31-May-2026 10:33"
- *   Format: DD-Mon-YYYY HH:MM
- *   Mon: Jan=01 Feb=02 Mar=03 Apr=04 May=05 Jun=06 Jul=07 Aug=08 Sep=09 Oct=10 Nov=11 Dec=12
- *   → deliveryDate=2026-05-31, deliveryTime=10:33
+ * COACH: "Coach & Seat" field. Value may have extra spaces: "S6  - 8"
+ *   Normalize: collapse spaces, replace " - " with "/" → "S6/8"
  *
- * PAYMENT: "Type" label → "Prepaid"→"Prepaid", "COD"→"COD"
- *   (value cell may bold the text — text content is what matters)
+ * DATE: "Delivery Time" field format "DD-MM-YYYY HH:MM" (24hr, no comma)
+ *   → deliveryDate=YYYY-MM-DD, deliveryTime=HH:MM
+ *   e.g. "29-05-2026 16:52" → deliveryDate=2026-05-29, deliveryTime=16:52
  *
- * ITEMS — QUANTITY: column index 2 ("Quantity") — plain integer.
- *   Price column index 1, Amount column index 3.
- *   NO ₹ symbol in item rows — values are plain numbers.
- *   MANDATORY cross-check: Price × Qty = Amount (always exact for Zoop).
- *   If mismatch: Qty = round(Amount ÷ Price).
+ * PAYMENT: "Order Type" field (single ":" separator).
+ *   "COD"→"COD", "ONLINE"→"Prepaid", "PREPAID"→"Prepaid"
  *
- * ITEMS — DO NOT CONFUSE:
- *   The "Item Description" table (2 cols: Item Name | Description) appears BELOW items.
- *   It contains serving sizes (e.g. "Poha | 250g"). NEVER extract items from it.
- *   Detection: skip any table whose header row has exactly 2 cells = ["Item Name","Description"].
+ * TOTAL: "Total Amount" field → strip ":-", trim, parseFloat.
+ *   e.g. "189.00" → 189
  *
- * TOTAL: "Order Total" footer row → strip "₹ " prefix → parseFloat → totalAmount.
- * deliveryCharge: "(+) Delivery Charge" footer value.
- * tax: "(+) GST on food" footer value.
+ * ITEMS FORMAT: Lines starting with "👉🏼" (two emoji bytes: 👉 + 🏼 skin tone modifier)
+ *   Format: "👉🏼 qty-Item Name,"
+ *   qty = integer BEFORE the first "-" character.
+ *   Item name = everything AFTER the first "-", strip trailing comma.
+ *   e.g. "👉🏼 1-VEG MINI THALI," → qty=1, name="VEG MINI THALI"
+ *   e.g. "👉🏼 2-DAL RICE,"        → qty=2, name="DAL RICE"
+ *   e.g. "👉🏼 3-PANEER TIKKA,"    → qty=3, name="PANEER TIKKA"
+ *
+ * ITEM PRICE: Dibrail does NOT include individual item prices in the email.
+ *   Set price=0 for all items. totalAmount from "Total Amount" field covers the order.
+ *
+ * NOTES: "Notes" field value — use as remark if non-empty and not just ".".
+ *
+ * NO DOM PARSING: Plain text only — no domConfig needed.
+ * parseDomOrder is not called for this vendor. AI path (parseWithAWS) is used exclusively.
  */
 
-const domConfig = {
-
-  fields: {
-    orderNo: {
-      labelText:  'ZOOP Txn. No.',
-      valuePrefix: ': ',
-      transform: v => v.trim() || null,
-    },
-
-    paymentType: {
-      labelText:  'Type',
-      valuePrefix: ': ',
-      transform: v => {
-        const u = v.trim().toUpperCase();
-        if (u === 'COD' || u === 'CASH_ON_DELIVERY') return 'COD';
-        if (['PREPAID','PRE_PAID','ONLINE','PAID'].includes(u)) return 'Prepaid';
-        // value cell may just contain the word already (bold tag)
-        if (v.trim().toLowerCase() === 'prepaid') return 'Prepaid';
-        return v.trim() || 'COD';
-      },
-    },
-
-    customerName: {
-      labelText:  'Customer Name',
-      valuePrefix: ': ',
-      transform: v => v.trim() || null,
-    },
-
-    contactNo: {
-      labelText:  'Phone',
-      valuePrefix: ': ',
-      transform: v => {
-        const digits = v.replace(/\D/g, '');
-        if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
-        if (digits.length === 10) return digits;
-        return digits.slice(-10) || null;
-      },
-    },
-
-    trainInfo: {
-      labelText:  'Train',
-      valuePrefix: ': ',
-      transform: v => v.trim() || null,
-    },
-
-    coach: {
-      labelText:  'Coach/ Seat',
-      valuePrefix: ': ',
-      transform: v => v.trim().replace(/\s*\/\s*/g, '/') || null,
-    },
-
-    _deliveryRaw: {
-      labelText:  'Delivery Date',
-      valuePrefix: ': ',
-      transform: v => v.trim(),
-    },
-    // totalAmount captured from "Order Total" footer via captureFooterTotal
-  },
-
-  itemsTable: {
-    /**
-     * CONFIRMED column indexes (0-based):
-     *   0=Item Name  1=Price  2=Quantity  3=Amount
-     *
-     * Item rows: 4 cells, all colspan=1, plain numbers (no ₹).
-     * Footer rows: 2 cells, first has colspan=3.
-     * Detection: header row exactly ["Item Name","Price","Quantity","Amount"]
-     * Skip table if header is ["Item Name","Description"] — that's serving-size table.
-     */
-    columnMap: {
-      'item name': 'rawItem',   // index 0 — item name
-      'price':     'price',     // index 1 — unit price (no ₹)
-      'quantity':  'qty',       // index 2 — ordered quantity
-      'amount':    'amountCol', // index 3 — row total (cross-check only)
-    },
-
-    // No description column in Zoop items table — item name is clean in its own cell.
-    itemCellSplit: null,
-
-    footerLabels: [
-      'Base Price Total', '(+) GST on food', '(+) Delivery Charge',
-      '(+) GST on Delivery Charge', '(+) Gateway Platform Fees',
-      '(-) Discount', 'Order Total', '(-) Paid Online', 'BALANCE TO PAY',
-    ],
-
-    // Footer rows have colspan=3 on label cell + 1 value cell.
-    // Detection: cells.length === 2 (after colspan collapse).
-    captureFooterTotal: 'Order Total',  // → order._itemsTotal → totalAmount
-
-    // Skip "Item Description" table (serving sizes) — detected by 2-col header.
-    skipTableIfHeader: ['item name', 'description'],
-
-    enableQtyCrossCheck: true,
-    // Price (plain integer/float) × Qty = Amount (always exact for Zoop)
-    // No ₹ symbol in item cells — parseFloat directly.
-  },
-
-  postProcess(order) {
-    // ── Parse _deliveryRaw → deliveryDate + deliveryTime ───────────────────
-    // Format: "31-May-2026 10:33"  (DD-Mon-YYYY HH:MM)
-    const MONTHS = {
-      jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-      jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12',
-    };
-    const raw = order._deliveryRaw || '';
-    const m = raw.match(/(\d{1,2})-(\w{3})-(\d{4})\s+(\d{1,2}:\d{2})/);
-    if (m) {
-      const mo = MONTHS[m[2].toLowerCase()];
-      order.deliveryDate = mo ? `${m[3]}-${mo}-${m[1].padStart(2,'0')}` : null;
-      order.deliveryTime = m[4].length === 4 ? '0' + m[4] : m[4];
-    } else {
-      order.deliveryDate = null;
-      order.deliveryTime = null;
-    }
-    delete order._deliveryRaw;
-
-    // ── Qty cross-check ────────────────────────────────────────────────────
-    if (order.items && Array.isArray(order.items)) {
-      for (const item of order.items) {
-        if (item._amount && item.price > 0) {
-          const expected = item.price * item.quantity;
-          if (Math.abs(expected - item._amount) > 1) {
-            const corrected = Math.round(item._amount / item.price);
-            if (corrected > 0) item.quantity = corrected;
-          }
-          delete item._amount;
-        }
-      }
-    }
-
-    // ── totalAmount from "Order Total" footer ──────────────────────────────
-    if (order._itemsTotal && order._itemsTotal > 0) {
-      order.totalAmount = order._itemsTotal;
-    }
-    delete order._itemsTotal;
-
-    return order;
-  },
-};
-
 const matchers = [
-  { match: 'zoopindia', name: 'Zoop India', type: 'zoop' },
-  { match: 'zoop',      name: 'Zoop India', type: 'zoop' },
+  { match: 'dibrail',     name: 'Dibrail', type: 'dibrail' },
+  { match: 'dibrailcare', name: 'Dibrail', type: 'dibrail' },
 ];
 
-const type = 'zoop';
+const type = 'dibrail';
 
-const rule = `VENDOR: ZOOP INDIA
-SENDER: noreply@zoopindia.com | FORMAT: Pure HTML single-part (no text/plain). Amazon SES.
+const rule = `VENDOR: DIBRAIL
+SENDER: dibrailcare@gmail.com | FORMAT: Multipart — use text/plain part.
 
-ORDER NO: "ZOOP Txn. No." label — use the full ZO... string exactly as-is.
-  e.g. ": ZO29663100616818" → strip ": " prefix → orderNo = "ZO29663100616818"
+EMAIL STRUCTURE: Each field line starts with ✅ emoji, uses ":-" as separator.
+Items start with 👉🏼 emoji. "Order Type" uses single ":" (not ":-").
 
-ORDER DETAILS TABLE — 5 rows, 4 columns each (label | ": value" | label | ": value"):
-  Row 0: ZOOP Txn. No.    | : ZO29663100616818         | Type          | : Prepaid
-  Row 1: Customer Name    | : Shivani Gadge             | Phone         | : 9619770718
-  Row 2: Train            | : Mmct Duronto/ 22210       | Coach/ Seat   | : M1/ 10
-  Row 3: Restaurants Name | : (1466) Shri Krishna Food  | ETA           | : 31-May-2026 10:33
-  Row 4: At               | : Vadodara Jn/ BRC          | Delivery Date | : 31-May-2026 10:33
+EXACT STRUCTURE (verified from real .eml):
+  ✅ Order ID :- #210918
+  ✅ Customer Name :- Jaswant
+  ✅ Mobile :- 7339957184, 7357909913
+  ✅ Station :- VADODARA (BRC)
+  ✅ Train :- 20626 - BGKT MAS SF EXP
+  ✅ Coach & Seat :- S6  - 8
+  ✅ Delivery Time :- 29-05-2026 16:52
 
-ALL VALUE CELLS begin with ": " — always strip this prefix before using the value.
+  ✅ Order Type : COD             ← single ":" — NOT ":-"
+  ✅ Total Amount :- 189.00
+  ✅ Cash On Delivery :- 189.00
 
-- ORDER NO:  "ZOOP Txn. No." → strip ": " → full ZO... string.
-- PAYMENT:   "Type" → strip ": " → "Prepaid"→"Prepaid", "COD"→"COD".
-- CUSTOMER:  "Customer Name" → strip ": ".
-- CONTACT:   "Phone" → strip ": " → 10-digit number, strip +91/91 prefix.
-- TRAIN:     "Train" → strip ": " → full string e.g. "Mmct Duronto/ 22210".
-- COACH:     "Coach/ Seat" → strip ": " → normalize spaces around / → "M1/10".
-- DATE/TIME: "Delivery Date" (Row 4 RIGHT) — NOT "ETA". Both have same value.
-  Format: DD-Mon-YYYY HH:MM → deliveryDate=YYYY-MM-DD, deliveryTime=HH:MM.
-  e.g. "31-May-2026 10:33" → deliveryDate=2026-05-31, deliveryTime=10:33
+  ✅ Items:
+  👉🏼 1-VEG MINI THALI,
+  .
+  ✅ Notes :- .
 
-ITEMS TABLE — 4 columns: Item Name | Price | Quantity | Amount
-  Confirmed row: ["Poha", "60", "3", "180"]
-  - Item Name = col 0. Price = col 1 (plain number, NO ₹). Quantity = col 2. Amount = col 3.
-  - NO description column in items table. NO ₹ symbol in item cells.
-  - Quantity is a plain integer in its own cell — never inside item name.
-  MANDATORY cross-check: Price × Qty = Amount (always exact for Zoop).
-  If mismatch: Qty = round(Amount ÷ Price).
+FIELD RULES:
+- ORDER NO:  "Order ID" field → strip "#" → digits only. e.g. "#210918" → "210918"
+- CUSTOMER:  "Customer Name" → value after ":-".
+- CONTACT:   "Mobile" → MAY be multiple comma-separated numbers.
+             Always use the FIRST valid 10-digit number (starts 6-9).
+             e.g. "7339957184, 7357909913" → "7339957184"
+- TRAIN:     "Train" → full string with dash separator e.g. "20626 - BGKT MAS SF EXP".
+- COACH:     "Coach & Seat" → value may have extra spaces e.g. "S6  - 8".
+             Normalize: collapse spaces, replace " - " (space-dash-space) with "/" → "S6/8".
+- DATE/TIME: "Delivery Time" format DD-MM-YYYY HH:MM (no comma, 24hr).
+             → deliveryDate=YYYY-MM-DD, deliveryTime=HH:MM.
+             e.g. "29-05-2026 16:52" → deliveryDate=2026-05-29, deliveryTime=16:52
+- PAYMENT:   "Order Type" field (uses single ":"): "COD"→"COD", "ONLINE"/"PREPAID"→"Prepaid".
+- TOTAL:     "Total Amount" field → strip ":-" and spaces → parseFloat. e.g. 189.00 → 189.
+- REMARK:    "Notes" value — use if non-empty and not just ".".
 
-  *** ITEM DESCRIPTION TABLE — IGNORE COMPLETELY ***
-  A separate 2-col table below items has header ["Item Name", "Description"].
-  It lists serving sizes: e.g. "Poha | 250g".
-  This is NOT an items table. Never extract items or quantities from it.
-  Detection: skip any table whose header row is exactly ["Item Name", "Description"].
+ITEMS FORMAT: Lines starting with 👉🏼 (pointing hand emoji + skin tone modifier).
+  Pattern: "👉🏼 N-ITEM NAME,"
+  N = qty (integer BEFORE first "-"). Strip emoji prefix.
+  Item name = everything AFTER first "-", strip trailing comma and whitespace.
+  e.g. "👉🏼 1-VEG MINI THALI," → qty=1, name="VEG MINI THALI"
+  e.g. "👉🏼 2-DAL RICE,"       → qty=2, name="DAL RICE"
+  *** The number before "-" is ALWAYS the quantity — never part of the item name. ***
 
-FOOTER ROWS (colspan=3 on label, value in last cell — ₹ symbol present):
-  Base Price Total          | ₹ 180
-  (+) GST on food           | ₹ 9
-  (+) Delivery Charge       | ₹ 25.42
-  (+) GST on Delivery Charge| ₹ 4.58
-  (+) Gateway Platform Fees | ₹ 20
-  (-) Discount              | ₹ 0
-  Order Total               | ₹ 239  ← USE as totalAmount (strip ₹)
-  (-) Paid Online           | ₹ 239
-  BALANCE TO PAY            | ₹ 0
+ITEM PRICES: Dibrail does NOT include individual item prices.
+  Set price=0 for every item. Use "Total Amount" for the order total.
 
-- totalAmount: "Order Total" value (strip "₹ ").
-- deliveryCharge: "(+) Delivery Charge" value.
-- tax: "(+) GST on food" value.`;
+DO NOT VERIFY: Price × Qty formula is NOT applicable (all prices are 0).`;
 
-module.exports = { matchers, type, rule, domConfig };
+module.exports = { matchers, type, rule };
