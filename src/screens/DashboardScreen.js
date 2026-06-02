@@ -15,12 +15,83 @@ const SOUND_OPTIONS = [
   { name: 'Notification Tone', url: 'https://assets.mixkit.co/active_storage/sfx/2872/2872-preview.mp3' },
 ];
 
-const screenWidth = Dimensions.get('window').width;
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const TODAY_FILTER_KEY = 'dashboard_today_only';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Pagination Bar
+// ─────────────────────────────────────────────────────────────────────────────
+const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange }) => {
+  const [pageSizeDropdownVisible, setPageSizeDropdownVisible] = useState(false);
+  const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+  const startItem  = totalItems === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+  const endItem    = Math.min(currentPage * itemsPerPage, totalItems);
+
+  const NavBtn = ({ onPress, disabled, iconName }) => (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      style={[styles.pageNavBtn, disabled && styles.pageNavBtnDisabled]}
+    >
+      <Ionicons name={iconName} size={14} color={disabled ? '#cbd5e1' : '#0f172a'} />
+    </TouchableOpacity>
+  );
+
+  return (
+    <View style={styles.paginationBar}>
+      <View style={styles.pageSizeWrapper}>
+        <Text style={styles.pageSizeLabel}>Items per page:</Text>
+        <TouchableOpacity
+          style={styles.pageSizeSelector}
+          onPress={() => setPageSizeDropdownVisible(v => !v)}
+        >
+          <Text style={styles.pageSizeSelectorText}>{itemsPerPage}</Text>
+          <Ionicons name="chevron-down" size={12} color="#64748b" />
+        </TouchableOpacity>
+
+        {pageSizeDropdownVisible && (
+          <View style={styles.pageSizeDropdown}>
+            {PAGE_SIZE_OPTIONS.map(size => (
+              <TouchableOpacity
+                key={size}
+                style={[styles.pageSizeOption, size === itemsPerPage && styles.pageSizeOptionActive]}
+                onPress={() => {
+                  onItemsPerPageChange(size);
+                  setPageSizeDropdownVisible(false);
+                }}
+              >
+                <Text style={[styles.pageSizeOptionText, size === itemsPerPage && styles.pageSizeOptionTextActive]}>
+                  {size}
+                </Text>
+                {size === itemsPerPage && <Ionicons name="checkmark" size={12} color="#0f172a" />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </View>
+
+      <Text style={styles.pageRangeText}>{startItem}–{endItem} of {totalItems}</Text>
+
+      <View style={styles.pageNavRow}>
+        <NavBtn iconName="play-skip-back"    onPress={() => onPageChange(1)}               disabled={currentPage === 1} />
+        <NavBtn iconName="chevron-back"      onPress={() => onPageChange(currentPage - 1)} disabled={currentPage === 1} />
+        <NavBtn iconName="chevron-forward"   onPress={() => onPageChange(currentPage + 1)} disabled={currentPage === totalPages} />
+        <NavBtn iconName="play-skip-forward" onPress={() => onPageChange(totalPages)}      disabled={currentPage === totalPages} />
+      </View>
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Expandable Order Row
+// ─────────────────────────────────────────────────────────────────────────────
 const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
   const [expanded, setExpanded] = useState(false);
   const STORAGE_KEY = 'viewedOrders';
-  const getViewedSet = () => { try { return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch { return new Set(); } };
+  const getViewedSet = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); }
+    catch { return new Set(); }
+  };
   const [viewed, setViewed] = useState(() => getViewedSet().has(item.id));
   const assignBtnRef = useRef(null);
 
@@ -28,12 +99,12 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
 
   const isCancelled = item.status === 'Cancelled';
   const isCompleted = item.status === 'Completed';
-  const badgeBg = isCancelled ? '#fef2f2' : (isCompleted ? '#f0fdf4' : '#fffbeb');
-  const badgeTxt = isCancelled ? '#dc2626' : (isCompleted ? '#16a34a' : '#b45309');
-  const badgeBorder = isCancelled ? '#fecaca' : (isCompleted ? '#bbf7d0' : '#fde68a');
+  const badgeBg     = isCancelled ? '#fef2f2' : isCompleted ? '#f0fdf4' : '#fffbeb';
+  const badgeTxt    = isCancelled ? '#dc2626' : isCompleted ? '#16a34a' : '#b45309';
+  const badgeBorder = isCancelled ? '#fecaca' : isCompleted ? '#bbf7d0' : '#fde68a';
 
-  const codTypes = ['COD', 'CASH', 'CASH_ON_DELIVERY'];
-  const isCOD = codTypes.includes((item.paymentType || '').toUpperCase().replace(/\s+/g, '_'));
+  const codTypes    = ['COD', 'CASH', 'CASH_ON_DELIVERY'];
+  const isCOD       = codTypes.includes((item.paymentType || '').toUpperCase().replace(/\s+/g, '_'));
   const paymentColor = isCOD ? '#b45309' : '#0f766e';
   const paymentLabel = isCOD ? 'COD' : 'ONLINE';
   const amountToCollect = isCOD ? (item.totalAmount || 0) : 0;
@@ -70,32 +141,36 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
 
         <View style={{ flex: 0.8 }}>
           <View style={[styles.badge, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
-            <Text style={{ fontSize: 9, fontWeight: '700', color: badgeTxt, letterSpacing: 0.5 }}>{item.status || 'ACTIVE'}</Text>
+            <Text style={{ fontSize: 9, fontWeight: '700', color: badgeTxt, letterSpacing: 0.5 }}>
+              {item.status || 'ACTIVE'}
+            </Text>
           </View>
         </View>
 
         <Text style={[styles.cell, { flex: 1.1, fontWeight: '700', color: '#0f172a' }]}>{item.orderNo}</Text>
-        <Text style={[styles.cell, { flex: 1.0, fontSize: 12 }]}>{item.deliveryDate ? new Date(item.deliveryDate).toLocaleDateString('en-GB') : '—'}</Text>
+        <Text style={[styles.cell, { flex: 1.0, fontSize: 12 }]}>
+          {item.deliveryDate ? new Date(item.deliveryDate).toLocaleDateString('en-GB') : '—'}
+        </Text>
         <Text style={[styles.cell, { flex: 0.8, fontSize: 12, fontWeight: '500' }]}>{item.deliveryTime || '—'}</Text>
         <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={1}>{item.vendorName}</Text>
 
         <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={2}>
           {item.trainInfo || 'N/A'}{' '}
-          <Text style={{ color: '#dc2626', fontWeight: '700' }}>({item.coach || 'No Coach'}{item.seat ? ` / ${item.seat}` : ''})</Text>
+          <Text style={{ color: '#dc2626', fontWeight: '700' }}>
+            ({item.coach || 'No Coach'}{item.seat ? ` / ${item.seat}` : ''})
+          </Text>
         </Text>
 
         <View style={{ flex: 0.9 }}>
-          <Text style={[styles.paymentTag, { color: paymentColor, borderColor: paymentColor }]}>{paymentLabel}</Text>
+          <Text style={[styles.paymentTag, { color: paymentColor, borderColor: paymentColor }]}>
+            {paymentLabel}
+          </Text>
         </View>
 
-        {/* ── ACTIONS: green assign btn + blue print btn ── */}
+        {/* ── ACTIONS ── */}
         <View style={{ flex: 1.2, flexDirection: 'row', justifyContent: 'center', gap: 6 }}>
           <View style={{ position: 'relative' }}>
-            <TouchableOpacity
-              ref={assignBtnRef}
-              style={styles.assignBtn}
-              onPress={handleAssignPress}
-            >
+            <TouchableOpacity ref={assignBtnRef} style={styles.assignBtn} onPress={handleAssignPress}>
               <Ionicons name="bicycle-outline" size={16} color="#ffffff" />
             </TouchableOpacity>
             {isAssigned && (
@@ -106,10 +181,7 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
           </View>
 
           <View style={{ position: 'relative' }}>
-            <TouchableOpacity
-              style={styles.printBtn}
-              onPress={() => onPrint(item)}
-            >
+            <TouchableOpacity style={styles.printBtn} onPress={() => onPrint(item)}>
               <Ionicons name="print-outline" size={16} color="#ffffff" />
             </TouchableOpacity>
             {isPrinted && (
@@ -124,6 +196,8 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
       {expanded && (
         <View style={styles.expandedContent}>
           <View style={styles.expandedLayout}>
+
+            {/* LEFT — Items */}
             <View style={styles.expandSectionLeft}>
               <View style={styles.miniTableHeader}>
                 <Text style={[styles.miniHeadText, { flex: 1 }]}>ITEM NAME</Text>
@@ -132,11 +206,14 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
               {item.items && item.items.map((prod, idx) => (
                 <View key={idx} style={styles.miniTableRow}>
                   <Text style={[styles.miniCellText, { flex: 1 }]}>{prod.name}</Text>
-                  <Text style={[styles.miniCellText, { width: 56, textAlign: 'center', fontWeight: '700', color: '#0f172a' }]}>{prod.quantity}</Text>
+                  <Text style={[styles.miniCellText, { width: 56, textAlign: 'center', fontWeight: '700', color: '#0f172a' }]}>
+                    {prod.quantity}
+                  </Text>
                 </View>
               ))}
             </View>
 
+            {/* MID — Customer */}
             <View style={styles.expandSectionMid}>
               <Text style={styles.sectionLabel}>CUSTOMER DETAILS</Text>
               <Text style={styles.remarkText}>{item.customerName}</Text>
@@ -157,17 +234,28 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
               )}
             </View>
 
+            {/* RIGHT — Billing */}
             <View style={styles.expandSectionRight}>
               <Text style={styles.sectionLabel}>BILLING SUMMARY</Text>
-              <View style={styles.financeRow}><Text style={styles.financeLabel}>Sub Total</Text><Text style={styles.financeValue}>₹ {item.subTotal || 0}</Text></View>
-              <View style={styles.financeRow}><Text style={styles.financeLabel}>Tax / GST</Text><Text style={styles.financeValue}>₹ {item.tax || 0}</Text></View>
-              <View style={styles.financeRow}><Text style={styles.financeLabel}>Delivery</Text><Text style={styles.financeValue}>₹ {item.deliveryCharge || 0}</Text></View>
+              <View style={styles.financeRow}>
+                <Text style={styles.financeLabel}>Sub Total</Text>
+                <Text style={styles.financeValue}>₹ {item.subTotal || 0}</Text>
+              </View>
+              <View style={styles.financeRow}>
+                <Text style={styles.financeLabel}>Tax / GST</Text>
+                <Text style={styles.financeValue}>₹ {item.tax || 0}</Text>
+              </View>
+              <View style={styles.financeRow}>
+                <Text style={styles.financeLabel}>Delivery</Text>
+                <Text style={styles.financeValue}>₹ {item.deliveryCharge || 0}</Text>
+              </View>
               <View style={styles.financeDivider} />
               <View style={styles.financeRow}>
                 <Text style={[styles.financeLabel, { fontWeight: '700', color: '#0f172a' }]}>TOTAL BILL</Text>
-                <Text style={[styles.financeValue, { fontSize: 15, fontWeight: '800', color: '#0f172a' }]}>₹ {item.totalAmount || 0}</Text>
+                <Text style={[styles.financeValue, { fontSize: 15, fontWeight: '800', color: '#0f172a' }]}>
+                  ₹ {item.totalAmount || 0}
+                </Text>
               </View>
-
               {isCOD && (
                 <View style={styles.amountToCollectBar}>
                   <Text style={styles.atcLabel}>COLLECT CASH</Text>
@@ -182,33 +270,59 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
   );
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen
+// ─────────────────────────────────────────────────────────────────────────────
 export default function DashboardScreen({ clientId }) {
-  const [appReady, setAppReady] = useState(true);
-  const [orders, setOrders] = useState([]);
-  const [executives, setExecutives] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const [assignModalVisible, setAssignModalVisible] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState(null);
-  const [dropdownPos, setDropdownPos] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const [appReady, setAppReady]       = useState(true);
+  const [orders, setOrders]           = useState([]);
+  const [executives, setExecutives]   = useState([]);
+  const [loading, setLoading]         = useState(true);
   const [printedOrders, setPrintedOrders] = useState(new Set());
-  const [alertSound, setAlertSound] = useState(SOUND_OPTIONS[0].url);
+  const [alertSound, setAlertSound]   = useState(SOUND_OPTIONS[0].url);
 
-  const soundRef = useRef(null);
+  // ── Today-only filter — persisted in localStorage ──
+  const [todayOnly, setTodayOnly] = useState(() => {
+    try { return localStorage.getItem(TODAY_FILTER_KEY) === 'true'; }
+    catch { return false; }
+  });
+
+  // ── Pagination ──
+  const [currentPage, setCurrentPage]   = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
+
+  // ── Assign modal ──
+  const [assignModalVisible, setAssignModalVisible] = useState(false);
+  const [selectedOrder, setSelectedOrder]           = useState(null);
+  const [dropdownPos, setDropdownPos]               = useState({ x: 0, y: 0, width: 0, height: 0 });
+
+  const soundRef    = useRef(null);
   const isFirstLoad = useRef(true);
 
-  // Subscribe to client doc for alertSound preference
+  // ── Toggle today-only and persist ──
+  const handleTodayToggle = () => {
+    const next = !todayOnly;
+    setTodayOnly(next);
+    setCurrentPage(1);
+    try { localStorage.setItem(TODAY_FILTER_KEY, String(next)); } catch {}
+  };
+
+  // ── Today's date string for comparison (YYYY-MM-DD) ──
+  const getTodayStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  // ── Subscribe to client alertSound ──
   useEffect(() => {
     if (!clientId) return;
     const unsub = onSnapshot(doc(db, 'clients', clientId), (snap) => {
-      if (snap.exists()) {
-        setAlertSound(snap.data().alertSound || SOUND_OPTIONS[0].url);
-      }
+      if (snap.exists()) setAlertSound(snap.data().alertSound || SOUND_OPTIONS[0].url);
     });
     return () => unsub();
   }, [clientId]);
 
-  // Init sound system when alertSound changes
+  // ── Init sound ──
   useEffect(() => {
     (async () => {
       try {
@@ -228,23 +342,24 @@ export default function DashboardScreen({ clientId }) {
   async function playAlert() {
     if (Platform.OS === 'web' && soundRef.current) {
       soundRef.current.currentTime = 0;
-      soundRef.current.play().catch(e => {});
+      soundRef.current.play().catch(() => {});
     } else if (soundRef.current) {
       await soundRef.current.replayAsync();
     }
   }
 
+  // ── Fetch orders + executives ──
   useEffect(() => {
     if (!appReady) return;
     const q = query(collection(db, 'orders'), where('clientId', '==', clientId));
     const unsubscribeOrders = onSnapshot(q, (snapshot) => {
-      const ordersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      ordersList.sort((a, b) => {
+      const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => {
         const timeA = a.deliveryTime || '23:59';
         const timeB = b.deliveryTime || '23:59';
         return timeA.localeCompare(timeB);
       });
-      setOrders(ordersList);
+      setOrders(list);
       setLoading(false);
 
       if (isFirstLoad.current) { isFirstLoad.current = false; return; }
@@ -253,14 +368,45 @@ export default function DashboardScreen({ clientId }) {
 
     const unsubscribeExecs = onSnapshot(
       query(collection(db, 'executives'), where('clientId', '==', clientId)),
-      (snapshot) => {
-        setExecutives(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      }
+      (snapshot) => setExecutives(snapshot.docs.map(d => ({ id: d.id, ...d.data() })))
     );
 
     return () => { unsubscribeOrders(); unsubscribeExecs(); };
   }, [appReady]);
 
+  // ── Derive display list (Active + optional today filter) ──
+  const activeOrders = orders.filter(o => {
+    if (o.status !== 'Active') return false;
+    if (!todayOnly) return true;
+
+    // Compare deliveryDate to today
+    if (!o.deliveryDate) return false;
+    try {
+      // deliveryDate can be a Firestore Timestamp, ISO string, or Date-like string
+      const d = o.deliveryDate?.toDate
+        ? o.deliveryDate.toDate()
+        : new Date(o.deliveryDate);
+      const orderDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return orderDateStr === getTodayStr();
+    } catch { return false; }
+  });
+
+  // ── Pagination derived values ──
+  const totalItems  = activeOrders.length;
+  const totalPages  = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+  const startIdx    = (currentPage - 1) * itemsPerPage;
+  const pagedOrders = activeOrders.slice(startIdx, startIdx + itemsPerPage);
+
+  const handlePageChange = (page) => {
+    setCurrentPage(Math.min(Math.max(1, page), totalPages));
+  };
+
+  const handleItemsPerPageChange = (size) => {
+    setItemsPerPage(size);
+    setCurrentPage(1);
+  };
+
+  // ── Print ──
   const handlePrint = async (order) => {
     try {
       let clientPaymentId = '';
@@ -269,7 +415,7 @@ export default function DashboardScreen({ clientId }) {
         if (clientSnap.exists()) clientPaymentId = clientSnap.data().paymentId || '';
       } catch (e) {}
 
-      let itemsHtml = "";
+      let itemsHtml = '';
       if (order.items && order.items.length > 0) {
         order.items.forEach(item => {
           itemsHtml += `
@@ -280,28 +426,25 @@ export default function DashboardScreen({ clientId }) {
         });
       }
 
-      const codTypes = ['COD', 'CASH', 'CASH_ON_DELIVERY'];
-      const rawPaymentType = (order.paymentType || 'ONLINE').toUpperCase().replace(/\s+/g, '_');
-      const isCOD = codTypes.includes(rawPaymentType);
+      const codTypes    = ['COD', 'CASH', 'CASH_ON_DELIVERY'];
+      const rawPayType  = (order.paymentType || 'ONLINE').toUpperCase().replace(/\s+/g, '_');
+      const isCOD       = codTypes.includes(rawPayType);
       const paymentType = isCOD ? 'COD' : 'ONLINE';
       const amountToCollect = isCOD ? (order.totalAmount || 0) : 0;
 
-      const trainNo = (order.trainInfo || 'N/A');
+      const trainNo   = order.trainInfo || 'N/A';
       const coachSeat = `${order.coach || '-'}/${order.seat || '-'}`;
-
-      const upiUrl = `upi://pay?pa=${clientPaymentId}&pn=${order.vendorName || 'Vendor'}&am=${amountToCollect}&cu=INR`;
+      const upiUrl    = `upi://pay?pa=${clientPaymentId}&pn=${order.vendorName || 'Vendor'}&am=${amountToCollect}&cu=INR`;
 
       const qrHtml = clientPaymentId && isCOD ? `
         <div class="center" style="margin-top:12px;">
-          <img
-            id="qrImg"
+          <img id="qrImg"
             src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiUrl)}"
             style="width:150px;height:150px;object-fit:contain;border:1px solid #ccc;padding:4px;"
           />
-          <div style="font-size:11px; margin-top:6px; font-weight:bold; word-break:break-all;">Scan & Pay</div>
-          <div style="font-size:10px; margin-top:2px; word-break:break-all;">${clientPaymentId}</div>
-        </div>
-      ` : '';
+          <div style="font-size:11px;margin-top:6px;font-weight:bold;word-break:break-all;">Scan & Pay</div>
+          <div style="font-size:10px;margin-top:2px;word-break:break-all;">${clientPaymentId}</div>
+        </div>` : '';
 
       const htmlContent = `
   <html>
@@ -315,14 +458,9 @@ export default function DashboardScreen({ clientId }) {
         body {
           background-color: #ffffff;
           font-family: 'Courier New', Courier, monospace;
-          width: 72mm;
-          margin: 0 auto;
-          padding: 10px 16px 16px 10px;
-          font-size: 12px;
-          color: #000;
-          font-weight: 900;
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
+          width: 72mm; margin: 0 auto; padding: 10px 16px 16px 10px;
+          font-size: 12px; color: #000; font-weight: 900;
+          -webkit-print-color-adjust: exact; print-color-adjust: exact;
         }
         .center { text-align: center; }
         .bold { font-weight: bold; }
@@ -349,7 +487,7 @@ export default function DashboardScreen({ clientId }) {
       </style>
     </head>
     <body>
-      <div class="center bold" style="font-size:16px; margin-bottom:2px;">E-Catering Orders</div>
+      <div class="center bold" style="font-size:16px;margin-bottom:2px;">E-Catering Orders</div>
       <div class="center" style="font-size:11px;">26 - Shree Siddhivinayak Complex,<br/>Railway Station Vadodara</div>
       <hr class="divider"/>
       <table class="detail-table">
@@ -409,13 +547,12 @@ export default function DashboardScreen({ clientId }) {
             doPrint();
           }
         }, 200);
-
       } else {
-        Alert.alert("Notice", "Printing is currently configured for Web only.");
+        Alert.alert('Notice', 'Printing is currently configured for Web only.');
       }
     } catch (error) {
-      console.error("Printing Error:", error);
-      Alert.alert("Print Failed", "Could not generate the receipt.");
+      console.error('Printing Error:', error);
+      Alert.alert('Print Failed', 'Could not generate the receipt.');
     }
   };
 
@@ -436,10 +573,40 @@ export default function DashboardScreen({ clientId }) {
 
   return (
     <SafeAreaView style={styles.container}>
+
+      {/* ── Top bar ── */}
       <View style={styles.topBar}>
-        <Text style={styles.heading}>Active Orders</Text>
+        <View>
+          <Text style={styles.heading}>Active Orders</Text>
+          <View style={styles.countRow}>
+            <View style={[styles.countDot, { backgroundColor: '#f59e0b' }]} />
+            <Text style={styles.subHeading}>
+              {loading ? '…' : `${activeOrders.length} ${activeOrders.length === 1 ? 'order' : 'orders'} found`}
+            </Text>
+          </View>
+        </View>
+
+        {/* Today Only toggle button */}
+        <TouchableOpacity
+          style={[styles.todayBtn, todayOnly && styles.todayBtnActive]}
+          onPress={handleTodayToggle}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={todayOnly ? 'today' : 'today-outline'}
+            size={15}
+            color={todayOnly ? '#ffffff' : '#0f172a'}
+          />
+          <Text style={[styles.todayBtnText, todayOnly && styles.todayBtnTextActive]}>
+            Today Only
+          </Text>
+          {todayOnly && (
+            <View style={styles.todayActiveDot} />
+          )}
+        </TouchableOpacity>
       </View>
 
+      {/* ── Table container ── */}
       <View style={styles.tableContainer}>
         <View style={styles.tableHeader}>
           <View style={{ width: 36 }} />
@@ -455,30 +622,44 @@ export default function DashboardScreen({ clientId }) {
 
         {loading ? (
           <ActivityIndicator size="large" color="#0f172a" style={{ marginTop: 60 }} />
-        ) : orders.filter(o => o.status === 'Active').length === 0 ? (
+        ) : activeOrders.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
-            <Text style={styles.emptyStateText}>No active orders right now</Text>
+            <Text style={styles.emptyStateText}>
+              {todayOnly ? "No active orders for today" : "No active orders right now"}
+            </Text>
           </View>
         ) : (
-          <FlatList
-            data={orders.filter(o => o.status === 'Active')}
-            keyExtractor={item => item.id}
-            renderItem={({ item }) => (
-              <ExpandableOrderRow
-                item={item}
-                onPrint={handlePrint}
-                onAssign={openAssignModal}
-                isPrinted={printedOrders.has(item.id)}
-              />
-            )}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingBottom: 50, flexGrow: 1 }}
-          />
+          <>
+            <FlatList
+              data={pagedOrders}
+              keyExtractor={item => item.id}
+              renderItem={({ item }) => (
+                <ExpandableOrderRow
+                  item={item}
+                  onPrint={handlePrint}
+                  onAssign={openAssignModal}
+                  isPrinted={printedOrders.has(item.id)}
+                />
+              )}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingBottom: 0, flexGrow: 1 }}
+              showsVerticalScrollIndicator={false}    // ← hidden
+              showsHorizontalScrollIndicator={false}  // ← hidden
+            />
+
+            <PaginationBar
+              currentPage={currentPage}
+              totalItems={totalItems}
+              itemsPerPage={itemsPerPage}
+              onPageChange={handlePageChange}
+              onItemsPerPageChange={handleItemsPerPageChange}
+            />
+          </>
         )}
       </View>
 
-      {/* Assign Executive Modal */}
+      {/* ── Assign Executive Modal ── */}
       <Modal visible={assignModalVisible} transparent animationType="fade">
         <TouchableOpacity
           style={styles.dropdownBackdrop}
@@ -488,7 +669,7 @@ export default function DashboardScreen({ clientId }) {
           <View
             style={[
               styles.dropdownContainer,
-              { top: dropdownPos.y + dropdownPos.height + 6, left: dropdownPos.x - 180 }
+              { top: dropdownPos.y + dropdownPos.height + 6, left: dropdownPos.x - 180 },
             ]}
           >
             <Text style={styles.dropdownTitle}>ASSIGN EXECUTIVE</Text>
@@ -516,51 +697,193 @@ export default function DashboardScreen({ clientId }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc', padding: 24, height: Platform.OS === 'web' ? '100vh' : '100%' },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  heading: { fontSize: 22, fontWeight: '800', color: '#0f172a', letterSpacing: -0.5 },
-  tableContainer: { flex: 1, backgroundColor: 'white', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden' },
-  tableHeader: { flexDirection: 'row', backgroundColor: '#0f172a', paddingVertical: 12, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' },
+  container: {
+    flex: 1, backgroundColor: '#f8fafc', padding: 24,
+    height: Platform.OS === 'web' ? '100vh' : '100%',
+  },
+
+  topBar: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12,
+  },
+  heading:    { fontSize: 22, fontWeight: '800', color: '#0f172a', letterSpacing: -0.5 },
+  countRow:   { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  countDot:   { width: 7, height: 7, borderRadius: 4 },
+  subHeading: { fontSize: 13, color: '#64748b', fontWeight: '500' },
+
+  // ── Today Only button ──
+  todayBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    paddingHorizontal: 14, paddingVertical: 9,
+    borderRadius: 8, borderWidth: 1.5, borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+  },
+  todayBtnActive: {
+    backgroundColor: '#0f172a', borderColor: '#0f172a',
+  },
+  todayBtnText: {
+    fontSize: 13, fontWeight: '700', color: '#0f172a',
+  },
+  todayBtnTextActive: { color: '#ffffff' },
+  todayActiveDot: {
+    width: 7, height: 7, borderRadius: 4,
+    backgroundColor: '#22c55e', marginLeft: 2,
+  },
+
+  tableContainer: {
+    flex: 1, backgroundColor: 'white', borderRadius: 8,
+    borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden',
+  },
+  tableHeader: {
+    flexDirection: 'row', backgroundColor: '#0f172a',
+    paddingVertical: 12, paddingHorizontal: 12,
+    borderBottomWidth: 1, borderColor: '#e2e8f0', alignItems: 'center',
+  },
   col: { fontSize: 10, fontWeight: '700', color: '#ffffff', letterSpacing: 0.8 },
+
   cardContainer: { borderBottomWidth: 1, borderColor: '#f1f5f9' },
-  tableRow: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 12, alignItems: 'center', backgroundColor: 'white' },
+  tableRow: {
+    flexDirection: 'row', paddingVertical: 12,
+    paddingHorizontal: 12, alignItems: 'center', backgroundColor: 'white',
+  },
   tableRowExpanded: { backgroundColor: '#f8fafc' },
   cell: { fontSize: 13, color: '#334155', fontWeight: '700' },
   badge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, borderWidth: 1, alignSelf: 'flex-start' },
-  paymentTag: { fontSize: 10, fontWeight: '700', borderWidth: 1, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start', letterSpacing: 0.5 },
-  assignBtn: { width: 32, height: 32, borderRadius: 6, backgroundColor: '#16a34a', justifyContent: 'center', alignItems: 'center' },
-  printBtn: { width: 32, height: 32, borderRadius: 6, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center' },
-  tickBadge: { position: 'absolute', top: -5, right: -5, width: 14, height: 14, borderRadius: 7, backgroundColor: '#0f172a', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
+  paymentTag: {
+    fontSize: 10, fontWeight: '700', borderWidth: 1, borderRadius: 4,
+    paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start', letterSpacing: 0.5,
+  },
+  assignBtn: {
+    width: 32, height: 32, borderRadius: 6,
+    backgroundColor: '#16a34a', justifyContent: 'center', alignItems: 'center',
+  },
+  printBtn: {
+    width: 32, height: 32, borderRadius: 6,
+    backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center',
+  },
+  tickBadge: {
+    position: 'absolute', top: -5, right: -5,
+    width: 14, height: 14, borderRadius: 7,
+    backgroundColor: '#0f172a', justifyContent: 'center',
+    alignItems: 'center', borderWidth: 1.5, borderColor: '#fff',
+  },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
   emptyStateText: { fontSize: 14, color: '#94a3b8' },
-  expandedContent: { backgroundColor: '#f8fafc', padding: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
+
+  expandedContent: {
+    backgroundColor: '#f8fafc', padding: 16,
+    borderTopWidth: 1, borderTopColor: '#e2e8f0',
+  },
   expandedLayout: { flexDirection: 'row', gap: 16 },
-  expandSectionLeft: { flex: 1.5, backgroundColor: 'white', borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: '#e2e8f0' },
-  miniTableHeader: { flexDirection: 'row', backgroundColor: '#f8fafc', padding: 8, borderBottomWidth: 1, borderColor: '#e2e8f0' },
+
+  expandSectionLeft: {
+    flex: 1.5, backgroundColor: 'white', borderRadius: 6,
+    overflow: 'hidden', borderWidth: 1, borderColor: '#e2e8f0',
+  },
+  miniTableHeader: {
+    flexDirection: 'row', backgroundColor: '#f8fafc',
+    padding: 8, borderBottomWidth: 1, borderColor: '#e2e8f0',
+  },
   miniHeadText: { fontSize: 10, fontWeight: '700', color: '#94a3b8', letterSpacing: 0.6 },
   miniTableRow: { flexDirection: 'row', padding: 9, borderBottomWidth: 1, borderColor: '#f1f5f9' },
   miniCellText: { fontSize: 13, color: '#0f172a', fontWeight: '700' },
-  expandSectionMid: { flex: 1, padding: 12, backgroundColor: 'white', borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0' },
+
+  expandSectionMid: {
+    flex: 1, padding: 12, backgroundColor: 'white',
+    borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0',
+  },
   sectionLabel: { fontSize: 10, fontWeight: '700', color: '#94a3b8', letterSpacing: 0.8, marginBottom: 8 },
-  remarkText: { fontSize: 13, color: '#0f172a', fontWeight: '700', marginBottom: 3 },
-  remarkBox: { marginTop: 10, padding: 10, backgroundColor: '#fffbeb', borderRadius: 6, borderWidth: 1, borderColor: '#fde68a' },
-  remarkAlertText: { fontSize: 10, fontWeight: '700', color: '#b45309', marginBottom: 3, letterSpacing: 0.5 },
+  remarkText:   { fontSize: 13, color: '#0f172a', fontWeight: '700', marginBottom: 3 },
+  remarkBox: {
+    marginTop: 10, padding: 10, backgroundColor: '#fffbeb',
+    borderRadius: 6, borderWidth: 1, borderColor: '#fde68a',
+  },
+  remarkAlertText:   { fontSize: 10, fontWeight: '700', color: '#b45309', marginBottom: 3, letterSpacing: 0.5 },
   remarkContentText: { fontSize: 12, color: '#92400e', fontWeight: '600', lineHeight: 16 },
-  assignedBadgeBox: { marginTop: 12, padding: 10, backgroundColor: '#f0fdf4', borderRadius: 6, borderWidth: 1, borderColor: '#bbf7d0' },
+  assignedBadgeBox: {
+    marginTop: 12, padding: 10, backgroundColor: '#f0fdf4',
+    borderRadius: 6, borderWidth: 1, borderColor: '#bbf7d0',
+  },
   assignedBadgeLabel: { fontSize: 10, fontWeight: '700', color: '#16a34a', marginBottom: 2, letterSpacing: 0.5 },
-  assignedBadgeName: { fontSize: 13, fontWeight: '700', color: '#14532d' },
-  expandSectionRight: { flex: 1, backgroundColor: 'white', borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', padding: 12 },
-  financeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  financeLabel: { fontSize: 12, color: '#334155', fontWeight: '600' },
-  financeValue: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
+  assignedBadgeName:  { fontSize: 13, fontWeight: '700', color: '#14532d' },
+
+  expandSectionRight: {
+    flex: 1, backgroundColor: 'white', borderRadius: 6,
+    borderWidth: 1, borderColor: '#e2e8f0', padding: 12,
+  },
+  financeRow:     { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  financeLabel:   { fontSize: 12, color: '#334155', fontWeight: '600' },
+  financeValue:   { fontSize: 13, fontWeight: '800', color: '#0f172a' },
   financeDivider: { height: 1, backgroundColor: '#e2e8f0', marginVertical: 8 },
-  amountToCollectBar: { backgroundColor: '#0f172a', padding: 10, borderRadius: 6, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
+  amountToCollectBar: {
+    backgroundColor: '#0f172a', padding: 10, borderRadius: 6,
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginTop: 10,
+  },
   atcLabel: { color: '#94a3b8', fontWeight: '700', fontSize: 10, letterSpacing: 0.8 },
   atcValue: { color: 'white', fontWeight: '800', fontSize: 15 },
+
   dropdownBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.15)' },
-  dropdownContainer: { position: 'absolute', backgroundColor: 'white', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0', width: 210, paddingVertical: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 16, elevation: 12 },
-  dropdownTitle: { fontSize: 10, fontWeight: '700', color: '#94a3b8', letterSpacing: 0.8, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderColor: '#f1f5f9' },
-  execDropdownRow: { flexDirection: 'row', alignItems: 'center', padding: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderColor: '#f1f5f9', gap: 10 },
+  dropdownContainer: {
+    position: 'absolute', backgroundColor: 'white', borderRadius: 8,
+    borderWidth: 1, borderColor: '#e2e8f0', width: 210, paddingVertical: 4,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1, shadowRadius: 16, elevation: 12,
+  },
+  dropdownTitle: {
+    fontSize: 10, fontWeight: '700', color: '#94a3b8', letterSpacing: 0.8,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderColor: '#f1f5f9',
+  },
+  execDropdownRow: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 12, paddingHorizontal: 14,
+    borderBottomWidth: 1, borderColor: '#f1f5f9', gap: 10,
+  },
   execName: { fontSize: 14, fontWeight: '600', color: '#0f172a' },
+
+  // ── Pagination ──
+  paginationBar: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'flex-end', gap: 20,
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderTopWidth: 1, borderColor: '#e2e8f0', backgroundColor: 'white',
+  },
+  pageSizeWrapper:  { flexDirection: 'row', alignItems: 'center', gap: 8, position: 'relative' },
+  pageSizeLabel:    { fontSize: 12, color: '#64748b', fontWeight: '500' },
+  pageSizeSelector: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc', minWidth: 60,
+  },
+  pageSizeSelectorText: { fontSize: 13, fontWeight: '700', color: '#0f172a' },
+  pageSizeDropdown: {
+    position: 'absolute', bottom: 36, left: 0,
+    width: 80, backgroundColor: 'white', borderRadius: 8,
+    borderWidth: 1, borderColor: '#e2e8f0',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1, shadowRadius: 10,
+    elevation: 6, overflow: 'hidden', zIndex: 999,
+  },
+  pageSizeOption: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', paddingHorizontal: 12,
+    paddingVertical: 10, borderBottomWidth: 1, borderColor: '#f1f5f9',
+  },
+  pageSizeOptionActive:     { backgroundColor: '#f8fafc' },
+  pageSizeOptionText:       { fontSize: 13, color: '#334155', fontWeight: '500' },
+  pageSizeOptionTextActive: { color: '#0f172a', fontWeight: '700' },
+  pageRangeText: { fontSize: 12, color: '#64748b', fontWeight: '500' },
+  pageNavRow:    { flexDirection: 'row', gap: 4 },
+  pageNavBtn: {
+    width: 32, height: 32, borderRadius: 6,
+    borderWidth: 1, borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc', justifyContent: 'center', alignItems: 'center',
+  },
+  pageNavBtnDisabled: { borderColor: '#f1f5f9', backgroundColor: '#fafafa' },
 });
