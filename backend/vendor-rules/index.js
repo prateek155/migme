@@ -1,5 +1,5 @@
 'use strict';
-
+ 
 /**
  * Vendor Rules Registry
  * ─────────────────────
