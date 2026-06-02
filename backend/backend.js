@@ -679,10 +679,20 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         $('td').each((_, el) => {
           const cellText = $(el).text().replace(/\s+/g, ' ').trim();
           if (cellText.includes(labelText)) {
-            const sibling = $(el).next('td');
-            if (sibling.length) {
-              rawValue = sibling.text().replace(/\s+/g, ' ').trim();
-              return false; // break .each()
+            if (cfg.selfContained) {
+              // BUG 1 FIX: value is in the SAME td, not a sibling
+              // e.g. "REL FOOD Ref.No : 1050866" — extract last number
+              const numMatch = cellText.match(/(\d+)\s*$/);
+              if (numMatch) {
+                rawValue = numMatch[1];
+                return false; // break .each()
+              }
+            } else {
+              const sibling = $(el).next('td');
+              if (sibling.length) {
+                rawValue = sibling.text().replace(/\s+/g, ' ').trim();
+                return false; // break .each()
+              }
             }
           }
         });
@@ -730,7 +740,19 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       const secondText = cells.eq(1).text().trim();
       if (!firstText && footerLabels.some(l =>
           secondText.toLowerCase().includes(l.toLowerCase()))) {
-        return false; // break .each()
+        // BUG 2 FIX: capture the "Total" footer row value before breaking
+        if (domConfig.itemsTable.captureFooterTotal) {
+          const captureLabel = domConfig.itemsTable.captureFooterTotal;
+          if (secondText.toLowerCase().includes(captureLabel.toLowerCase())) {
+            const lastCell = cells.last();
+            order._itemsTotal = parseFloat(lastCell.text().replace(/[^\d.]/g, '')) || 0;
+            log(`${tag} Captured _itemsTotal: ${order._itemsTotal}`);
+            return false; // break only after capturing Total
+          }
+          // Not the Total row yet — keep scanning footer rows
+          return; // continue .each() to reach the Total row
+        }
+        return false; // no captureFooterTotal configured — stop here
       }
 
       // ── Parse item row ───────────────────────────────────────────────────
