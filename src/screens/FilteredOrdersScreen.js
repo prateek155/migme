@@ -401,7 +401,6 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
       });
 
       setOrders(list);
-      setFilteredOrders(list);
       setLoading(false);
     }, (error) => {
       console.error('Orders sync error:', error.message);
@@ -410,7 +409,8 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
     return () => unsubscribe();
   }, [statusFilter, clientId]);
 
-  // ── Search filter ──
+  // ── Effect 1: Filter orders whenever orders list or search query changes ──
+  // ✅ Does NOT reset the page — so staying on page 2/3 is preserved
   useEffect(() => {
     if (!searchQuery.trim()) {
       setFilteredOrders(orders);
@@ -424,8 +424,13 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
         (o.assignedExecutiveName || '').toLowerCase().includes(q)
       ));
     }
-    setCurrentPage(1);
   }, [searchQuery, orders]);
+
+  // ── Effect 2: Reset to page 1 ONLY when the search query changes ──
+  // ✅ Firestore updates do NOT trigger this — page stays stable
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
 
   const handleUpdateStatus = async (order, newStatus) => {
     try {
@@ -542,7 +547,7 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           </View>
         ) : (
           <>
-            {/* ── Rows (FlatList with hidden scrollbar) ── */}
+            {/* ── Rows ── */}
             <FlatList
               data={pagedOrders}
               keyExtractor={item => item.id}
@@ -555,8 +560,8 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
               )}
               style={{ flex: 1 }}
               contentContainerStyle={{ paddingBottom: 0, flexGrow: 1 }}
-              showsVerticalScrollIndicator={false}       // ← hide scrollbar
-              showsHorizontalScrollIndicator={false}     // ← hide scrollbar
+              showsVerticalScrollIndicator={false}
+              showsHorizontalScrollIndicator={false}
             />
 
             {/* ── Pagination bar ── */}
@@ -616,7 +621,7 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
 
             <ScrollView
               style={{ maxHeight: 240 }}
-              showsVerticalScrollIndicator={false}    // ← hide scrollbar
+              showsVerticalScrollIndicator={false}
             >
               {executives.map(exec => (
                 <TouchableOpacity
