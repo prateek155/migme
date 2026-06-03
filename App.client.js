@@ -8,7 +8,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from './src/firebaseConfig';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import HomepageScreen from './src/screens/HomepageScreen';
+import HomepageScreen from './src/screens/HomePageScreen';
 import ClientLoginScreen from './src/screens/ClientLoginScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import DailyBusinessScreen from './src/screens/DailyBusinessScreen';

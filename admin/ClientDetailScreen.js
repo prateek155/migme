@@ -94,12 +94,22 @@ export default function ClientDetailScreen({ client, onBack }) {
   const [liveClient, setLiveClient] = useState(client);
   const [saving, setSaving] = useState(false);
   const [newBlockedEmail, setNewBlockedEmail] = useState('');
+  const [vendors, setVendors] = useState([]);
+  const [vendorSaving, setVendorSaving] = useState(null);
+
+  const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
 
   useEffect(() => {
     if (!client?.id) return;
     const unsub = onSnapshot(doc(db, 'clients', client.id), (snap) => {
       if (snap.exists()) setLiveClient({ id: snap.id, ...snap.data() });
     });
+    fetch(`${BACKEND_URL}/api/vendors`, {
+      headers: { 'x-admin-key': process.env.EXPO_PUBLIC_ADMIN_API_KEY || '' },
+    })
+      .then(r => r.json())
+      .then(setVendors)
+      .catch(() => {});
     return () => unsub();
   }, [client?.id]);
 
@@ -155,6 +165,26 @@ export default function ClientDetailScreen({ client, onBack }) {
       Alert.alert('Error', e.message);
     }
     setSaving(false);
+  };
+
+  const toggleVendorBlock = async (vendorType) => {
+    if (!liveClient?.id) return;
+    setVendorSaving(vendorType);
+    try {
+      const blocked = liveClient.blockedVendors || [];
+      if (blocked.includes(vendorType)) {
+        await updateDoc(doc(db, 'clients', liveClient.id), {
+          blockedVendors: arrayRemove(vendorType),
+        });
+      } else {
+        await updateDoc(doc(db, 'clients', liveClient.id), {
+          blockedVendors: arrayUnion(vendorType),
+        });
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message);
+    }
+    setVendorSaving(null);
   };
 
   if (!liveClient) return null;
@@ -323,6 +353,49 @@ export default function ClientDetailScreen({ client, onBack }) {
               Blocked emails are ignored for this client only — other clients remain unaffected.
             </Text>
           </View>
+        </GlassCard>
+
+        {/* Vendor Block/Unlock */}
+        <GlassCard accentColor={G.amber}>
+          <SectionHeader label="Vendors" dot={G.amber} count={vendors.length} />
+          <View style={styles.infoStrip}>
+            <Ionicons name="information-circle-outline" size={13} color={G.blue} />
+            <Text style={styles.infoStripText}>
+              Toggle to block or unblock a vendor for this client.
+            </Text>
+          </View>
+          {vendors.length === 0 ? (
+            <View style={styles.emptyBlocked}>
+              <ActivityIndicator size="small" color={G.textMuted} />
+            </View>
+          ) : (
+            vendors.map((v) => {
+              const blocked = (liveClient.blockedVendors || []).includes(v.type);
+              return (
+                <View key={v.type} style={styles.blockedChip}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.blockedChipEmail}>{v.name}</Text>
+                    <Text style={{ fontSize: 11, color: G.textMuted }}>{v.match}</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => toggleVendorBlock(v.type)}
+                    disabled={vendorSaving === v.type}
+                    style={[styles.blockAddBtn, blocked && { backgroundColor: G.redGlass, borderColor: G.redBorder }]}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name={blocked ? 'unlock-outline' : 'lock-closed-outline'}
+                      size={14}
+                      color={blocked ? G.red : G.green}
+                    />
+                    <Text style={[styles.blockAddText, { color: blocked ? G.red : G.green }]}>
+                      {vendorSaving === v.type ? '...' : blocked ? 'UNLOCK' : 'BLOCK'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })
+          )}
         </GlassCard>
 
         {/* Login Instructions */}
