@@ -718,10 +718,11 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
                 const colonMatch = cellText.match(/:\s*(.+?)\s*$/);
                 if (colonMatch) {
                   rawValue = colonMatch[1];
-                }
-                const numMatch = cellText.match(/(\d+)\s*$/);
-                if (numMatch) {
-                  rawValue = numMatch[1];
+                } else {
+                  const numMatch = cellText.match(/(\d+)\s*$/);
+                  if (numMatch) {
+                    rawValue = numMatch[1];
+                  }
                 }
               } else {
                 const sibling = $(el).next('td, th');
