@@ -42,7 +42,7 @@ export default function DailyBusinessScreen({ visible, onClose, clientId }) {
         let revenue = 0, count = 0, codTotal = 0, codCount = 0, onlineTotal = 0, onlineCount = 0;
         snapshot.docs.forEach((doc) => {
           const data = doc.data();
-          if (data.deliveryDate === selectedDate && data.status !== 'Cancelled') {
+          if (data.deliveryDate === selectedDate && data.status === 'Completed') {
             const total = data.items?.reduce((sum, i) => sum + (i.price || 0) * (i.quantity || 1), 0) || 0;
             revenue += total;
             count++;
