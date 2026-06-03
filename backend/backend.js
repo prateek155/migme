@@ -690,35 +690,55 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     const $ = cheerio.load(htmlBody);
     const order = { vendorName };
 
-    // ── 1. Extract flat key/value fields ──────────────────────────────────
+    // ── 1a. Extract header <th> cells (Rajbhog/HomeBytes style) ────────────
+    const _thCells = [];
+    $('thead th').each((_, el) => {
+      _thCells.push($(el).text().replace(/\s+/g, ' ').trim());
+    });
+
+    // ── 1b. Extract flat key/value fields ────────────────────────────────
     for (const [fieldName, cfg] of Object.entries(domConfig.fields)) {
       let rawValue = null;
-      const labelsToTry = [cfg.labelText];
-      if (cfg.fallback) labelsToTry.push(cfg.fallback);
 
-      for (const labelText of labelsToTry) {
-        $('td').each((_, el) => {
-          const cellText = $(el).text().replace(/\s+/g, ' ').trim();
-          if (cellText.includes(labelText)) {
-            if (cfg.selfContained) {
-              // ✅ FIX 2 (already correct in original):
-              // Value is embedded in the SAME <td> as the label text.
-              // e.g. "REL FOOD Ref.No : 1050866" — extract last number sequence.
-              const numMatch = cellText.match(/(\d+)\s*$/);
-              if (numMatch) {
-                rawValue = numMatch[1];
-                return false; // break .each()
-              }
-            } else {
-              const sibling = $(el).next('td');
-              if (sibling.length) {
-                rawValue = sibling.text().replace(/\s+/g, ' ').trim();
-                return false; // break .each()
+      // headerThIndex fields: value is pre-extracted from header <th>
+      if (cfg.headerThIndex !== undefined && _thCells[cfg.headerThIndex]) {
+        rawValue = _thCells[cfg.headerThIndex];
+      } else {
+        const labelsToTry = [cfg.labelText];
+        if (cfg.fallback) labelsToTry.push(cfg.fallback);
+
+        for (const labelText of labelsToTry) {
+          $('td, th').each((_, el) => {
+            const cellText = $(el).text().replace(/\s+/g, ' ').trim();
+            if (cellText.includes(labelText)) {
+              if (cfg.selfContained) {
+                // Try all matches — last match (deepest in DOM) wins.
+                // This avoids picking merged header cells that happen to contain
+                // the label text but may have truncated/wrong values at the end.
+                const colonMatch = cellText.match(/:\s*(.+?)\s*$/);
+                if (colonMatch) {
+                  rawValue = colonMatch[1];
+                }
+                const numMatch = cellText.match(/(\d+)\s*$/);
+                if (numMatch) {
+                  rawValue = numMatch[1];
+                }
+              } else {
+                const sibling = $(el).next('td, th');
+                if (sibling.length) {
+                  rawValue = sibling.text().replace(/\s+/g, ' ').trim();
+                  return false;
+                }
               }
             }
-          }
-        });
-        if (rawValue !== null) break;
+          });
+          if (rawValue !== null) break;
+        }
+      }
+
+      // Strip vendor-defined value prefix if present (e.g. Zoop ": " prefix)
+      if (rawValue !== null && cfg.valuePrefix && rawValue.startsWith(cfg.valuePrefix)) {
+        rawValue = rawValue.slice(cfg.valuePrefix.length);
       }
 
       try {
@@ -736,11 +756,15 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     const items     = [];
 
     $('table tr').each((_, tr) => {
-      const cells = $(tr).find('td');
+      const cells = $(tr).find('td, th');
       if (!cells.length) return;
 
       // ── Detect header row ────────────────────────────────────────────────
       if (!headerFound) {
+        // Skip rows that don't have exactly the right number of columns
+        // (prevents nested wrapper rows with embedded header text from being detected)
+        if (cells.length !== Object.keys(columnMap).length) return;
+
         let matchCount = 0;
         cells.each((i, td) => {
           const text = $(td).text().trim().toLowerCase();
@@ -755,14 +779,18 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         return;
       }
 
-      // ── Footer detection ─────────────────────────────────────────────────
+      // ── Footer detection: RailFood pattern (first empty + second=label) OR Zoop pattern (first=label) ──
       const firstText  = cells.eq(0).text().trim();
       const secondText = cells.eq(1).text().trim();
-      if (!firstText && footerLabels.some(l =>
-          secondText.toLowerCase().includes(l.toLowerCase()))) {
+      const isFooter = (!firstText && footerLabels.some(l =>
+          secondText.toLowerCase().includes(l.toLowerCase()))) ||
+          (footerLabels.some(l => firstText.toLowerCase().includes(l.toLowerCase())));
+      if (isFooter) {
+        // Capture footer total if configured and this row matches the capture label
         if (domConfig.itemsTable.captureFooterTotal) {
-          const captureLabel = domConfig.itemsTable.captureFooterTotal;
-          if (secondText.toLowerCase().includes(captureLabel.toLowerCase())) {
+          const captureLabel = domConfig.itemsTable.captureFooterTotal.toLowerCase();
+          if (firstText.toLowerCase().includes(captureLabel) ||
+              secondText.toLowerCase().includes(captureLabel)) {
             const lastCell = cells.last();
             order._itemsTotal = parseFloat(lastCell.text().replace(/[^\d.]/g, '')) || 0;
             log(`${tag} Captured _itemsTotal: ${order._itemsTotal}`);
@@ -772,6 +800,11 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         }
         return false;
       }
+
+      // ── Skip rows where the item-name cell still contains a header label ──
+      // (handles wrapper/summary rows that appear after the header in some emails)
+      const _rawItemText = cells.eq(colIndex['rawItem']).text().trim().toLowerCase();
+      if (Object.keys(columnMap).some(h => _rawItemText === h.toLowerCase())) return;
 
       // ── Parse item row ───────────────────────────────────────────────────
       const rawItemCell = cells.eq(colIndex['rawItem']);
