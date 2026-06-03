@@ -12,6 +12,10 @@ const imaps            = require('imap-simple');
 const { simpleParser } = require('mailparser');
 // DOM parsing for text/html vendors — used by parseDomOrder()
 const cheerio          = require('cheerio');
+// ✅ FIX 1: decode import kept for any future use but NOT called on parsed.html
+// mailparser's simpleParser already decodes quoted-printable — calling decodeQP
+// again on parsed.html corrupts = signs, ₹ symbol, CSS values and HTML attributes.
+// parseDomOrder now uses htmlBody directly without re-decoding.
 const { decode: decodeQP } = require('quoted-printable');
 
 // ── Firebase client SDK ────────────────────────────────────────────────────
@@ -346,10 +350,27 @@ async function warmEmailCache(clientId) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ✅ FIX 5: recordProcessedEmail — do NOT add incomplete_data UIDs to emailSet
+//
+// OLD BUG: emailSet.add(uidStr) was called unconditionally for ALL statuses,
+// including 'incomplete_data'. This meant Guard 2 (emailSet.has) fired on the
+// next cycle BEFORE Guard 3 could check for 'incomplete_data' and allow retry.
+// Result: any order that failed field validation was permanently lost until
+// server restart, even though the email remained unread in IMAP.
+//
+// FIX: Only add to emailSet for truly final statuses. 'incomplete_data' emails
+// stay OUT of the in-memory set so Guard 3 gets a chance to retry them.
+// ═══════════════════════════════════════════════════════════════════════════
 async function recordProcessedEmail(uidStr, orderNo, status, clientId) {
   const date     = todayStr();
   const emailSet = getEmailSet(date, clientId);
-  emailSet.add(uidStr);
+
+  // ✅ FIX 5: only cache in memory if status is truly final
+  if (status !== 'incomplete_data') {
+    emailSet.add(uidStr);
+  }
+
   try {
     await setDoc(doc(db, 'processed_emails', emailDocId(clientId, uidStr)), {
       status, orderNo: orderNo || '', clientId,
@@ -589,13 +610,6 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // VENDOR REGISTRY
-// VENDOR_MAP    — identifies vendor from sender email (first match wins)
-// VENDOR_RULES  — AI prompt per vendor (text/plain vendors + DOM fallback)
-// VENDOR_DOM_CONFIGS — DOM parser config per vendor (text/html vendors only)
-//
-// All three are built from vendor-rules/ files automatically.
-// To add a vendor: create its file + add to vendor-rules/index.js.
-// To make a vendor use DOM parsing: add domConfig to its file.
 // ═══════════════════════════════════════════════════════════════════════════
 const { VENDOR_MAP, VENDOR_RULES, VENDOR_DOM_CONFIGS } = require('./vendor-rules');
 
@@ -619,7 +633,6 @@ function getMissingFields(orderData) {
 const cleanFloat = (val) => parseFloat((val || 0).toString().replace(/[^\d.]/g, '')) || 0;
 
 // ── HTML to plain text — used for AI path (text/plain vendors) ──────────────
-// Also used as last-resort for DOM-capable vendors when parsed.html is missing.
 function htmlToText(html) {
   return html
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -646,30 +659,38 @@ function htmlToText(html) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DOM ORDER PARSER — text/html vendors only
 //
-// Called when:  vendor file exports domConfig  AND  parsed.html is available.
-// Skipped when: vendor has no domConfig (text/plain)  OR  parsed.html missing.
+// ✅ FIX 1: Removed decodeQP(htmlBody) call.
+//    mailparser's simpleParser already decodes quoted-printable encoding.
+//    Calling decodeQP again on already-decoded HTML corrupted:
+//      - = signs in HTML attributes and CSS (e.g. color=#3d3d3d became color=3d3d3d)
+//      - ₹ rupee symbol (multi-byte UTF-8, mangled by second QP decode)
+//      - URL query strings with & and = characters
+//    This caused Cheerio to find nothing, DOM parse returned null every time,
+//    and all railfood/railreceipt orders fell through to AI with broken text.
 //
-// WHY THIS IS BETTER THAN AI FOR HTML EMAILS:
-//   Each value is read directly from a specific <td> cell.
-//   Item name, serving description, price and quantity are in SEPARATE cells.
-//   It is structurally impossible to confuse "1 Pcs" description with qty=1.
-//   The actual ordered quantity is always cells[qtyColumnIndex].text() — direct.
+// ✅ FIX 2: selfContained field support (railfood orderNo).
+//    When cfg.selfContained is true, the value is in the SAME <td> as the label
+//    (e.g. "REL FOOD Ref.No : 1050866" all in one cell). The engine now extracts
+//    the last number from the label cell's own text instead of reading a sibling.
+//    Already present in original code — confirmed correct, no change needed.
 //
-// THREAD-SAFE: pure function, no shared state — safe for concurrent emails.
+// ✅ FIX 3: stripQtyPrefix support (railreceipt "x6" → 6).
+//    parseInt("x6") returns NaN → was defaulting every item to qty=1.
+//    Now strips vendor-defined prefix before parseInt.
 //
-// RETURNS: order object in the same shape as parseWithAWS(), or null on failure.
-//          null → caller falls back to AI path automatically.
+// ✅ FIX 4: stripCurrencyPrefix support (railreceipt "₹ 180" → 180).
+//    parseFloat("₹ 180") returns NaN → was setting every item price to 0.
+//    Now strips vendor-defined currency prefix before parseFloat.
 // ═══════════════════════════════════════════════════════════════════════════
 function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
   try {
-    // quoted-printable decode: raw .eml has =3D, =20, soft-wrapped lines etc.
-    const cleanHtml = decodeQP(htmlBody);
-    const $         = cheerio.load(cleanHtml);
-    const order     = { vendorName };
+    // ✅ FIX 1: Use htmlBody directly — mailparser already decoded quoted-printable.
+    // REMOVED: const cleanHtml = decodeQP(htmlBody);
+    // REMOVED: const $ = cheerio.load(cleanHtml);
+    const $ = cheerio.load(htmlBody);
+    const order = { vendorName };
 
     // ── 1. Extract flat key/value fields ──────────────────────────────────
-    // Find the <td> whose text contains labelText, then read the next sibling
-    // <td> as the raw value. Tries fallback label if primary not found.
     for (const [fieldName, cfg] of Object.entries(domConfig.fields)) {
       let rawValue = null;
       const labelsToTry = [cfg.labelText];
@@ -680,8 +701,9 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
           const cellText = $(el).text().replace(/\s+/g, ' ').trim();
           if (cellText.includes(labelText)) {
             if (cfg.selfContained) {
-              // BUG 1 FIX: value is in the SAME td, not a sibling
-              // e.g. "REL FOOD Ref.No : 1050866" — extract last number
+              // ✅ FIX 2 (already correct in original):
+              // Value is embedded in the SAME <td> as the label text.
+              // e.g. "REL FOOD Ref.No : 1050866" — extract last number sequence.
               const numMatch = cellText.match(/(\d+)\s*$/);
               if (numMatch) {
                 rawValue = numMatch[1];
@@ -708,10 +730,8 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     }
 
     // ── 2. Extract items table ─────────────────────────────────────────────
-    // Column positions are resolved at runtime from header text — NOT hardcoded
-    // indexes. Handles future column additions in vendor template automatically.
     const { columnMap, itemCellSplit, footerLabels } = domConfig.itemsTable;
-    const colIndex  = {};     // fieldName → column index (resolved from header row)
+    const colIndex  = {};
     let headerFound = false;
     const items     = [];
 
@@ -719,7 +739,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       const cells = $(tr).find('td');
       if (!cells.length) return;
 
-      // ── Detect header row by matching column header text to columnMap ────
+      // ── Detect header row ────────────────────────────────────────────────
       if (!headerFound) {
         let matchCount = 0;
         cells.each((i, td) => {
@@ -732,36 +752,32 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
           }
         });
         if (matchCount === Object.keys(columnMap).length) headerFound = true;
-        return; // never parse the header row as an item
+        return;
       }
 
-      // ── Footer detection: stop when first cell empty + second = summary ──
+      // ── Footer detection ─────────────────────────────────────────────────
       const firstText  = cells.eq(0).text().trim();
       const secondText = cells.eq(1).text().trim();
       if (!firstText && footerLabels.some(l =>
           secondText.toLowerCase().includes(l.toLowerCase()))) {
-        // BUG 2 FIX: capture the "Total" footer row value before breaking
         if (domConfig.itemsTable.captureFooterTotal) {
           const captureLabel = domConfig.itemsTable.captureFooterTotal;
           if (secondText.toLowerCase().includes(captureLabel.toLowerCase())) {
             const lastCell = cells.last();
             order._itemsTotal = parseFloat(lastCell.text().replace(/[^\d.]/g, '')) || 0;
             log(`${tag} Captured _itemsTotal: ${order._itemsTotal}`);
-            return false; // break only after capturing Total
+            return false; // break after capturing Total
           }
-          // Not the Total row yet — keep scanning footer rows
-          return; // continue .each() to reach the Total row
+          return; // keep scanning footer rows to reach Total
         }
-        return false; // no captureFooterTotal configured — stop here
+        return false;
       }
 
       // ── Parse item row ───────────────────────────────────────────────────
       const rawItemCell = cells.eq(colIndex['rawItem']);
       const priceText   = cells.eq(colIndex['price']).text().trim();
       const qtyText     = cells.eq(colIndex['qty']).text().trim();
-      // totalCol intentionally ignored (RailFood billing bug: always = unit price)
 
-      // Split item <td> into name + serving description via <br> or newline
       let itemName = '', itemDesc = '';
       if (itemCellSplit === 'br') {
         const parts = (rawItemCell.html() || '')
@@ -770,6 +786,10 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
           .filter(Boolean);
         itemName = parts[0] || '';
         itemDesc = parts[1] || '';
+      } else if (domConfig.itemsTable.itemNameFromP) {
+        // ── Railreceipt: <p> = name, <small> = description ───────────────
+        itemName = rawItemCell.find('p').first().text().trim();
+        itemDesc = rawItemCell.find('small').text().trim();
       } else {
         const parts = rawItemCell.text().split('\n')
           .map(p => p.trim()).filter(Boolean);
@@ -777,17 +797,40 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         itemDesc = parts[1] || '';
       }
 
-      if (!itemName || !qtyText || !priceText) return; // skip empty/malformed rows
+      if (!itemName || !qtyText || !priceText) return;
 
-      const price    = parseFloat(priceText) || 0;
-      // ── QTY IS READ DIRECTLY FROM THE QUANTITY <td> CELL ────────────────
-      // The serving description in rawItemCell ("1 Pcs", "2 Idli + Sambar" etc.)
-      // is NEVER seen by this line. Quantity-confusion bugs are impossible here.
-      const quantity = parseInt(qtyText, 10) || 1;
-      const name     = itemDesc ? `${itemName} ${itemDesc}` : itemName;
+      // ✅ FIX 4: Strip vendor-defined currency prefix before parseFloat.
+      // Handles railreceipt "₹ 180" format — parseFloat("₹ 180") returns NaN.
+      // For all other vendors stripCurrencyPrefix is undefined → no change.
+      const cleanPriceText = domConfig.itemsTable.stripCurrencyPrefix
+        ? priceText.replace(domConfig.itemsTable.stripCurrencyPrefix, '').trim()
+        : priceText;
+      const price = parseFloat(cleanPriceText) || 0;
+
+      // ✅ FIX 3: Strip vendor-defined quantity prefix before parseInt.
+      // Handles railreceipt "x6" format — parseInt("x6") returns NaN → was 1.
+      // For all other vendors stripQtyPrefix is undefined → no change.
+      const cleanQtyText = domConfig.itemsTable.stripQtyPrefix
+        ? qtyText.replace(new RegExp('^' + domConfig.itemsTable.stripQtyPrefix, 'i'), '').trim()
+        : qtyText;
+      const quantity = parseInt(cleanQtyText, 10) || 1;
+
+      const name = itemDesc ? `${itemName} ${itemDesc}` : itemName;
+
+      // Capture amount column for cross-check if vendor defines it
+      let itemAmount = null;
+      if (domConfig.itemsTable.enableQtyCrossCheck && colIndex['amountCol'] !== undefined) {
+        const amountText = cells.eq(colIndex['amountCol']).text().trim();
+        const cleanAmountText = domConfig.itemsTable.stripCurrencyPrefix
+          ? amountText.replace(domConfig.itemsTable.stripCurrencyPrefix, '').trim()
+          : amountText;
+        itemAmount = parseFloat(cleanAmountText) || null;
+      }
 
       log(`${tag}      DOM item: "${name}" ₹${price} × ${quantity}`);
-      items.push({ name, quantity, price });
+      const itemObj = { name, quantity, price };
+      if (itemAmount !== null) itemObj._amount = itemAmount;
+      items.push(itemObj);
     });
 
     if (!headerFound || items.length === 0) {
@@ -796,14 +839,10 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     }
 
     order.items = items;
-
-    // Compute real subTotal (Price × Qty) — not the RailFood buggy Total column
     order.subTotal = items.reduce((s, it) => s + it.price * it.quantity, 0);
 
-    // Run vendor's postProcess: e.g. splits _deliveryRaw → deliveryDate + deliveryTime
     const finalOrder = domConfig.postProcess ? domConfig.postProcess(order) : order;
 
-    // Fill standard fields all downstream code expects
     finalOrder.vendorName     = vendorName;
     finalOrder.tax            = finalOrder.tax            ?? 0;
     finalOrder.deliveryCharge = finalOrder.deliveryCharge ?? 0;
@@ -814,7 +853,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
   } catch (e) {
     err(`${tag} parseDomOrder crashed: ${e.message}`);
-    return null; // always falls back to AI, never crashes the pipeline
+    return null;
   }
 }
 
@@ -920,7 +959,6 @@ function validateOrderData(data, vendorType) {
   if (!data.items || data.items.length === 0) {
     errors.push('No items found');
   } else {
-    // Per-vendor qty cap — railfood orders can have 500+ rotis for groups
     const qtyHardCap = vendorType === 'railfood' ? 500 : 200;
     for (const item of data.items) {
       if (item.quantity > qtyHardCap) {
@@ -944,8 +982,6 @@ function validateOrderData(data, vendorType) {
     warnings.push(`Coach value suspiciously long: "${data.coach}"`);
   }
 
-  // contactNo — extract first valid 10-digit Indian mobile.
-  // Handles multiple numbers (e.g. "7017853303, 8433299274") and +91/91 prefix.
   if (data.contactNo) {
     const raw       = data.contactNo.trim();
     const allDigits = raw.replace(/\D/g, '');
@@ -1049,7 +1085,6 @@ ${rawText.substring(0, 15000)}`;
         sub += item.price * item.quantity;
         log(`      ${item.name}: ₹${item.price} × ${item.quantity} = ₹${item.price * item.quantity}`);
       }
-      // RailFood: subTotal = sum of unit prices (billing bug) — skip recalculation
       if (vendorType !== 'railfood' && Math.abs((parseFloat(data.subTotal) || 0) - sub) > 5) {
         warn(`      SubTotal mismatch — correcting to ₹${sub}`);
         data.subTotal = sub;
@@ -1127,7 +1162,16 @@ function buildChangePayload(existingOrder, updateResult) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FETCH SINCE
+// FETCH SINCE — TESTING MODE
+// ─────────────────────────────────────────────────────────────────────────
+// PRODUCTION CHANGE (when going live):
+//   Replace the IMAP search in runPollingCycle from:
+//     connection.search([['SINCE', FETCH_SINCE]], ...)
+//   To:
+//     connection.search(['UNSEEN'], ...)
+//   Then delete FETCH_SINCE_FIXED, getFetchSince(), and the FETCH_SINCE
+//   variable inside runPollingCycle — they become dead code.
+//   Optionally fill in markEmailAsRead() to mark emails as read after saving.
 // ═══════════════════════════════════════════════════════════════════════════
 const FETCH_SINCE_FIXED = new Date('2026-05-29T22:30:00.000Z');
 
@@ -1173,7 +1217,6 @@ async function processEmail(
       warn(`${tag} Firestore pre-check failed for UID ${uidStr}: ${e.message} — processing anyway`);
     }
 
-    // Download full email body
     const fullMsg = await connection.search([['UID', uid]], { bodies: [''], markSeen: false });
     if (!fullMsg || fullMsg.length === 0) return;
     const parsed = await simpleParser(fullMsg[0].parts.find(p => p.which === '').body);
@@ -1210,7 +1253,6 @@ async function processEmail(
     }
 
     // ── Detect vendor ─────────────────────────────────────────────────────
-    // Done once here — used by both DOM path and AI path.
     let detectedType = 'generic', detectedName = '';
     for (const v of VENDOR_MAP) {
       if (lowerFrom.includes(v.match)) {
@@ -1227,8 +1269,7 @@ async function processEmail(
       } catch (_) {}
     }
 
-    // ── Build fullText for AI path (PDF + html-stripped text) ────────────
-    // Always built — used if DOM path is skipped or returns null.
+    // ── Build fullText for AI path ────────────────────────────────────────
     let fullText = parsed.text || '';
     if (!fullText && parsed.html) {
       fullText = htmlToText(parsed.html);
@@ -1251,10 +1292,7 @@ async function processEmail(
 
     log(`${tag} 🤖 Parsing: "${subject}" (From: ${fromAddress})`);
 
-    // ── PATH A: DOM parsing — text/html vendors ───────────────────────────
-    // Used when vendor has domConfig AND email has HTML part (parsed.html).
-    // Reads qty directly from the correct <td> — quantity-confusion impossible.
-    // Falls back to PATH B automatically if DOM parsing returns null.
+    // ── PATH A: DOM parsing ───────────────────────────────────────────────
     let orderData  = null;
     const domCfg   = VENDOR_DOM_CONFIGS[detectedType];
 
@@ -1268,24 +1306,29 @@ async function processEmail(
       }
     }
 
-    // ── PATH B: AI / Bedrock — text/plain vendors + DOM fallback ─────────
-    // Unchanged for all existing text/plain vendors.
-    // Also handles text/html vendors when DOM path returns null.
+    // ── PATH B: AI / Bedrock ──────────────────────────────────────────────
     if (!orderData) {
       orderData = await parseWithAWS(fullText, subject, fromAddress);
     }
 
+    // ✅ FIX 6: Add to sessionUIDCache on parse failure.
+    // OLD BUG: returning without caching meant the same email was re-downloaded
+    // and re-attempted every 30 seconds within the same session, hammering
+    // Bedrock with repeated calls for emails that were already failing.
+    // FIX: Cache the UID so it's skipped for the rest of this session.
+    // On server restart / reconnect, sessionUIDCache resets — giving a fresh retry.
     if (!orderData) {
       log(`${tag}    ❌ Parse failed — stays unread for retry`);
+      sessionUIDCache.add(uid); // ✅ FIX 6
       return;
     }
 
-    // Normalise order number: replace slashes (Firestore doc ID restriction)
     const finalOrderNo = (orderData.orderNo || orderData.pnr || '')
       .toString().replace(/\//g, '-').trim();
 
     if (!finalOrderNo || finalOrderNo.startsWith('AUTO_')) {
       log(`${tag}    ⚠️ No valid order number extracted — stays unread for retry`);
+      sessionUIDCache.add(uid);
       return;
     }
 
@@ -1366,6 +1409,8 @@ async function processEmail(
         if (missing) {
           log(`${tag}    ⚠️ INCOMPLETE — missing: [${missing}] — stays UNREAD for retry`);
           await recordProcessedEmail(uidStr, finalOrderNo, 'incomplete_data', clientId);
+          // ✅ FIX 5: sessionUIDCache NOT updated here — allow retry next cycle.
+          // recordProcessedEmail also skips emailSet for 'incomplete_data'.
           return;
         }
 
@@ -1391,7 +1436,7 @@ async function processEmail(
         await recordProcessedEmail(uidStr, finalOrderNo, 'success', clientId);
       }
     } finally {
-      releaseLock(lockKey); // always released — no lock leak possible
+      releaseLock(lockKey);
     }
 
   } catch (e) {
