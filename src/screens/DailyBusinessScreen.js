@@ -6,8 +6,13 @@ import { db } from '../firebaseConfig';
 
 const isWeb = Platform.OS === 'web';
 
-// Helper: format a Date object to YYYY-MM-DD
-const toDateStr = (date) => date.toISOString().slice(0, 10);
+// Helper: format a Date object to YYYY-MM-DD using LOCAL time (fixes UTC timezone bug)
+const toDateStr = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
 
 // Helper: format for display (e.g. "Mon, 30 May 2026")
 const toDisplayStr = (dateStr) => {
@@ -42,7 +47,8 @@ export default function DailyBusinessScreen({ visible, onClose, clientId }) {
         let revenue = 0, count = 0, codTotal = 0, codCount = 0, onlineTotal = 0, onlineCount = 0;
         snapshot.docs.forEach((doc) => {
           const data = doc.data();
-          if (data.deliveryDate === selectedDate && data.status === 'Completed') {
+          // Only count Delivered orders (excludes Active, Cancelled, etc.)
+          if (data.deliveryDate === selectedDate && data.status === 'Delivered') {
             const total = data.items?.reduce((sum, i) => sum + (i.price || 0) * (i.quantity || 1), 0) || 0;
             revenue += total;
             count++;
