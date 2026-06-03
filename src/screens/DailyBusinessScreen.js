@@ -41,20 +41,33 @@ export default function DailyBusinessScreen({ visible, onClose, clientId }) {
   useEffect(() => {
     if (!visible) return;
     setLoading(true);
+
+    // FIX: added where('deliveryDate', '==', selectedDate) to the query
+    // so we only fetch orders for the selected date instead of all orders.
     const unsubscribe = onSnapshot(
-      query(collection(db, 'orders'), where('clientId', '==', clientId)),
+      query(
+        collection(db, 'orders'),
+        where('clientId', '==', clientId),
+        where('deliveryDate', '==', selectedDate)
+      ),
       (snapshot) => {
         let revenue = 0, count = 0, codTotal = 0, codCount = 0, onlineTotal = 0, onlineCount = 0;
         snapshot.docs.forEach((doc) => {
           const data = doc.data();
-          // Only count Delivered orders (excludes Active, Cancelled, etc.)
-          if (data.deliveryDate === selectedDate && data.status === 'Delivered') {
-            const total = data.items?.reduce((sum, i) => sum + (i.price || 0) * (i.quantity || 1), 0) || 0;
-            revenue += total;
-            count++;
-            if (data.paymentType === 'COD') { codTotal += total; codCount++; }
-            else { onlineTotal += total; onlineCount++; }
-          }
+
+          // FIX: removed status === 'Delivered' filter — backend saves orders as 'Active'.
+          // Exclude only Cancelled orders so all real orders are counted.
+          if (data.status === 'Cancelled') return;
+
+          // FIX: use data.totalAmount directly (saved by backend, includes delivery charges).
+          // Fall back to computing from items if totalAmount is missing.
+          const total = data.totalAmount ||
+            data.items?.reduce((sum, i) => sum + (i.price || 0) * (i.quantity || 1), 0) || 0;
+
+          revenue += total;
+          count++;
+          if (data.paymentType === 'COD') { codTotal += total; codCount++; }
+          else { onlineTotal += total; onlineCount++; }
         });
         setTodayStats({ revenue, orders: count, cod: codTotal, codCount, online: onlineTotal, onlineCount });
         setLoading(false);
