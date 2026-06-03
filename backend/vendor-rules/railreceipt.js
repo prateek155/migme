@@ -201,10 +201,16 @@ const domConfig = {
     }
     delete order._greetingRaw;
 
-    // ── deliveryDate from Journey Date (YYYY-MM-DD HH:MM → date only) ──────
+    // ── deliveryDate from Journey Date ──────────────────────────────────────
+    // Variants: "YYYY-MM-DD HH:MM" (ISO), "DD-MM-YYYY" (Indian), "DD-MM-YYYY HH:MM"
     const jd = order._journeyDate || '';
-    const jdMatch = jd.match(/^(\d{4}-\d{2}-\d{2})/);
-    order.deliveryDate = jdMatch ? jdMatch[1] : null;
+    let m = jd.match(/^(\d{4})-(\d{2})-(\d{2})/);          // YYYY-MM-DD
+    if (m) {
+      order.deliveryDate = `${m[1]}-${m[2]}-${m[3]}`;
+    } else {
+      m = jd.match(/^(\d{2})-(\d{2})-(\d{4})/);           // DD-MM-YYYY
+      order.deliveryDate = m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+    }
     delete order._journeyDate;
 
     // ── deliveryTime from Delivery Time (ETA) → extract HH:MM ─────────────
