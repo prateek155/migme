@@ -143,6 +143,14 @@ const domConfig = {
         return 'COD';
       },
     },
+
+    // ACCEPTED email: customer name is in greeting "Dear <name>," not in a label-value pair
+    _greetingRaw: {
+      labelText:          'Dear',
+      selfContained:      true,
+      selfContainedExtract: /Dear\s+(.+?)\s*,/,
+      transform:          v => v.trim(),
+    },
   },
 
   itemsTable: {
@@ -187,6 +195,12 @@ const domConfig = {
   },
 
   postProcess(order) {
+    // ── customerName: prefer label-based, fallback to greeting "Dear <name>," ──
+    if (!order.customerName && order._greetingRaw) {
+      order.customerName = order._greetingRaw;
+    }
+    delete order._greetingRaw;
+
     // ── deliveryDate from Journey Date (YYYY-MM-DD HH:MM → date only) ──────
     const jd = order._journeyDate || '';
     const jdMatch = jd.match(/^(\d{4}-\d{2}-\d{2})/);

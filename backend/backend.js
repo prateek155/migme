@@ -709,16 +709,26 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
         for (const labelText of labelsToTry) {
           $('td, th').each((_, el) => {
+            // Skip wrapper cells that contain child td/th (e.g. RailRecipe's
+            // nested outer td wrappers around inner label-value cells)
+            if ($(el).find('td, th').length > 0) return;
             const cellText = $(el).text().replace(/\s+/g, ' ').trim();
             if (cellText.includes(labelText)) {
               if (cfg.selfContained) {
                 // Try all matches — last match (deepest in DOM) wins.
                 // This avoids picking merged header cells that happen to contain
                 // the label text but may have truncated/wrong values at the end.
+                // 1) Vendor-defined custom regex extract (e.g. greeting "Dear <name>,")
+                if (cfg.selfContainedExtract) {
+                  const m = cellText.match(cfg.selfContainedExtract);
+                  if (m) rawValue = m[1] || m[0];
+                }
+                // 2) Colon separator: "Label : Value"
                 const colonMatch = cellText.match(/:\s*(.+?)\s*$/);
                 if (colonMatch) {
                   rawValue = colonMatch[1];
                 } else {
+                  // 3) Trailing number: "Label 12345"
                   const numMatch = cellText.match(/(\d+)\s*$/);
                   if (numMatch) {
                     rawValue = numMatch[1];
