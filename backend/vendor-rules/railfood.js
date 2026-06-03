@@ -78,7 +78,8 @@ const domConfig = {
     },
 
     _deliveryRaw: {
-      labelText: 'Delivery Date',        // partial match covers "Delivery Date & Time"
+      labelText:     'Delivery Date',    // partial match covers "Delivery Date & Time"
+      selfContained: true,               // "Delivery Date & Time : 6/1/2026 & 08:17" — same cell
       transform: v => v.trim(),
     },
 
@@ -129,11 +130,11 @@ const domConfig = {
   postProcess(order) {
     // ── Split _deliveryRaw "6/1/2026 & 08:17" → deliveryDate + deliveryTime ──
     const raw = order._deliveryRaw || '';
-    const m = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*[&]\s*(\d{1,2}:\d{2})/);
+    const m = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s*[&]\s*(\d{1,2}:\d{2}))?/);
     if (m) {
       const [, mo, dd, yyyy, time] = m;
       order.deliveryDate = `${yyyy}-${mo.padStart(2,'0')}-${dd.padStart(2,'0')}`;
-      order.deliveryTime = time.length === 4 ? '0' + time : time;
+      order.deliveryTime = time ? (time.length === 4 ? '0' + time : time) : null;
     } else {
       order.deliveryDate = null;
       order.deliveryTime = null;
