@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-  SafeAreaView, Modal, Platform, Alert, Dimensions, ScrollView
+  SafeAreaView, Modal, Platform, Alert, Dimensions, ScrollView, Animated 
 } from 'react-native';
 import { collection, onSnapshot, query, where, updateDoc, doc, getDoc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
@@ -269,6 +269,55 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
     </View>
   );
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Skeleton Loader
+// ─────────────────────────────────────────────────────────────────────────────
+const SkeletonRow = () => {
+  const shimmer = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+
+  const Box = ({ flex }) => (
+    <Animated.View style={{
+      height: 12, borderRadius: 4, backgroundColor: '#e2e8f0',
+      opacity, flex,
+    }} />
+  );
+
+  return (
+    <View style={[styles.tableRow, { gap: 12 }]}>
+      <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#e2e8f0', opacity: 0.5 }} />
+      <Box flex={0.8} />
+      <Box flex={1.1} />
+      <Box flex={1.0} />
+      <Box flex={0.8} />
+      <Box flex={1.2} />
+      <Box flex={1.2} />
+      <Box flex={0.9} />
+      <Box flex={1.2} />
+    </View>
+  );
+};
+
+const SkeletonLoader = () => (
+  <View style={{ flex: 1 }}>
+    {Array.from({ length: 10 }).map((_, i) => (
+      <View key={i} style={{ borderBottomWidth: 1, borderColor: '#f1f5f9' }}>
+        <SkeletonRow />
+      </View>
+    ))}
+  </View>
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Screen
@@ -621,7 +670,7 @@ export default function DashboardScreen({ clientId }) {
         </View>
 
         {loading ? (
-          <ActivityIndicator size="large" color="#0f172a" style={{ marginTop: 60 }} />
+            <SkeletonLoader />
         ) : activeOrders.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
