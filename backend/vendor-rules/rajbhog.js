@@ -222,7 +222,7 @@ const domConfig = {
     // Item name comes from 'rawItem' (index 1). Description is appended for context.
     itemCellSplit: null,       // item name is already clean in its own <td>; no <br> split needed
 
-    footerLabels: ['Subtotal', 'GST', 'Discount', 'Delivery', 'Total'],
+    footerLabels: ['GST', 'Discount', 'Delivery', 'Total'],
 
     // Footer row detection: row has a <th> with colspan="6" + one <td> for value.
     // parseDomOrder should detect footer when cells[0] has colspan ≥ 2 or
