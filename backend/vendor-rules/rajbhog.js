@@ -140,8 +140,8 @@ const domConfig = {
       selfContained: true,
       labelText: 'Coach / Berth:',
       transform: v => {
-        // "Coach / Berth: B1 / 40" → "B1/40"
-        const m = v.match(/Coach\s*\/\s*Berth:\s*([A-Z0-9]+)\s*\/\s*(\d+)/i);
+        // "Coach / Berth: B1 / 40" → "B1/40" or "RAC/S3 / 55" → "RAC/S3/55"
+        const m = v.match(/Coach\s*\/\s*Berth:\s*([A-Z0-9/]+)\s*\/\s*(\d+)/i);
         return m ? `${m[1]}/${m[2]}` : null;
       },
     },
@@ -222,7 +222,7 @@ const domConfig = {
     // Item name comes from 'rawItem' (index 1). Description is appended for context.
     itemCellSplit: null,       // item name is already clean in its own <td>; no <br> split needed
 
-    footerLabels: ['GST', 'Discount', 'Delivery', 'Total'],
+    footerLabels: ['Subtotal', 'GST', 'Discount', 'Delivery', 'Total'],
 
     // Footer row detection: row has a <th> with colspan="6" + one <td> for value.
     // parseDomOrder should detect footer when cells[0] has colspan ≥ 2 or
