@@ -80,6 +80,118 @@ const normalizeVendor = (name) => {
   return VENDOR_ALIASES[key] || name.trim();
 };
 
+// ─── Extract Order ID from a row (robust, handles any column name) ────────────
+const extractOrderId = (row) => {
+  // Try exact known keys first
+  const knownKeys = [
+    'Order ID', 'ORDER ID', 'OrderId', 'order_id',
+    'Order No', 'ORDER NO', 'OrderNo', 'order_no',
+    'Order Number', 'ORDER NUMBER', 'order_number',
+    'PNR', 'pnr', 'ID', 'id',
+  ];
+  for (const key of knownKeys) {
+    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+      return String(row[key]).trim();
+    }
+  }
+  // Fallback: fuzzy match — find any key whose lowercase contains 'order' or 'id' or 'no'
+  const keys = Object.keys(row);
+  for (const key of keys) {
+    const lk = key.toLowerCase().replace(/[\s_\-\.]/g, '');
+    if (
+      lk.includes('orderid') || lk.includes('orderno') ||
+      lk.includes('ordernumber') || lk.includes('ordernum') ||
+      lk === 'id' || lk === 'no' || lk === 'number'
+    ) {
+      const val = String(row[key]).trim();
+      if (val && val !== 'undefined') return val;
+    }
+  }
+  // Last resort: return first non-empty cell value
+  for (const key of keys) {
+    const val = String(row[key]).trim();
+    if (val && val !== 'undefined' && val !== '') return val;
+  }
+  return '';
+};
+
+// ─── Skeleton Loader ──────────────────────────────────────────────────────────
+const SkeletonReportRow = ({ alt }) => {
+  const shimmer = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+
+  const Box = ({ flex, width }) => (
+    <Animated.View style={{
+      height: 12, borderRadius: 4, backgroundColor: '#e2e8f0',
+      opacity, ...(flex ? { flex } : { width: width || 60 }),
+    }} />
+  );
+
+  return (
+    <View style={[{
+      flexDirection: 'row', paddingVertical: 16, paddingHorizontal: 10,
+      borderBottomWidth: 1, borderColor: '#f1f5f9', alignItems: 'center', gap: 10,
+    }, alt && { backgroundColor: '#f8fafc' }]}>
+      <Box flex={0.4} />
+      <Box flex={1.8} />
+      <Box flex={0.8} />
+      <Box flex={0.8} />
+      <Box flex={1.4} />
+      <Box flex={1.4} />
+      <Box flex={1.4} />
+      <Box flex={0.9} />
+    </View>
+  );
+};
+
+const SkeletonSummaryCard = () => {
+  const shimmer = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+  const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.7] });
+  return (
+    <Animated.View style={{
+      flex: 1, height: 60, borderRadius: 8,
+      backgroundColor: '#cbd5e1', opacity,
+    }} />
+  );
+};
+
+const SkeletonLoader = () => (
+  <>
+    {/* Summary cards skeleton */}
+    <View style={{ flexDirection: 'row', gap: 12, marginBottom: 14 }}>
+      <SkeletonSummaryCard />
+      <SkeletonSummaryCard />
+      <SkeletonSummaryCard />
+    </View>
+
+    {/* Table skeleton */}
+    <View style={[styles.tableCard, { overflow: 'hidden' }]}>
+      <View style={{ backgroundColor: '#0f172a', height: 44 }} />
+      {Array.from({ length: 7 }).map((_, i) => (
+        <SkeletonReportRow key={i} alt={i % 2 !== 0} />
+      ))}
+    </View>
+  </>
+);
+
 // ─── In-App Toast Notification ────────────────────────────────────────────────
 const Toast = ({ message, type = 'info', onDismiss }) => {
   if (!message) return null;
@@ -454,6 +566,7 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
   const [uploadedOrders, setUploadedOrders] = useState([]);
   const [paymentFilter, setPaymentFilter] = useState('All');
   const [toast, setToast]                 = useState(null);
+  const [detectedColumn, setDetectedColumn] = useState('');
 
   const showToast    = (message, type = 'info') => setToast({ message, type });
   const dismissToast = () => setToast(null);
@@ -469,7 +582,9 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
       const res = await DocumentPicker.getDocumentAsync({
         type: [
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
           'text/csv',
+          '*/*',
         ],
         copyToCacheDirectory: true,
       });
@@ -492,31 +607,52 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
 
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
-      const json = XLSX.utils.sheet_to_json(sheet);
 
-      const ids = json.map(r =>
-        String(
-          r['Order ID'] || r['ORDER ID'] || r['OrderId'] ||
-          r['order_id'] || r['Order No'] || r['ORDER NO'] || ''
-        ).trim()
-      ).filter(Boolean);
+      // ── Read with header:1 to see raw rows and debug column names ──
+      const rawJson = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+      if (rawJson.length === 0) {
+        showToast('The file appears to be empty. Please check the file and try again.', 'error');
+        return;
+      }
+
+      // ── Log all column names for debugging ──
+      const allKeys = Object.keys(rawJson[0]);
+      console.log('📋 Excel columns found:', allKeys);
+      console.log('📋 First row sample:', rawJson[0]);
+
+      // ── Extract order IDs using robust extractor ──
+      const ids = rawJson
+        .map(row => extractOrderId(row))
+        .filter(id => id && id.trim() !== '' && id !== 'undefined');
 
       if (ids.length === 0) {
+        // Show actual column names to help user
+        const colList = allKeys.slice(0, 6).join('", "');
         showToast(
-          'No order IDs found. Make sure the file has a column named "Order ID", "ORDER ID", "Order No", or "ORDER NO".',
+          `Could not find Order ID column. Your file has columns: "${colList}". Please rename one of them to "Order ID" or "Order No".`,
           'error'
         );
         return;
       }
 
+      // ── Find which column was actually used ──
+      const firstRow = rawJson[0];
+      let usedColumn = allKeys[0];
+      for (const key of allKeys) {
+        const val = String(firstRow[key]).trim();
+        if (val === ids[0]) { usedColumn = key; break; }
+      }
+      setDetectedColumn(usedColumn);
+
       setUploadedOrders(ids);
       setCompareResult(null);
       showToast(
-        `✓ ${ids.length} orders loaded from "${file.name}" — tap COMPARE to check differences.`,
+        `✓ ${ids.length} orders loaded from "${file.name}" (column: "${usedColumn}") — tap COMPARE to check differences.`,
         'success'
       );
     } catch (err) {
-      console.log(err);
+      console.log('File read error:', err);
       showToast('Failed to read file. Please try again with a valid .xlsx or .csv file.', 'error');
     }
   };
@@ -1016,12 +1152,6 @@ export default function ReportsScreen({ clientId }) {
   const sw     = Dimensions.get('window').width;
   const PIE_SZ = Math.min(Math.floor((sw - 100) / 3.5), 240);
 
-  if (loading) return (
-    <View style={styles.loadingScreen}>
-      <ActivityIndicator size="large" color="#2563eb" />
-    </View>
-  );
-
   if (selectedVendor) {
     const vendorOrders = filteredOrders.filter(o => normalizeVendor(o.vendorName) === selectedVendor);
     return (
@@ -1200,94 +1330,100 @@ export default function ReportsScreen({ clientId }) {
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
       >
-        <View style={styles.chartCard}>
-          <View style={styles.chartRow}>
-            <View style={styles.piesSection}>
-              <View style={styles.pieBlock}>
-                {statusPieData.length > 0 ? (
-                  <CustomPieChart data={statusPieData} size={PIE_SZ} title="Order Status" />
-                ) : (
-                  <View style={[styles.emptyPie, { width: PIE_SZ, height: PIE_SZ }]}>
-                    <Ionicons name="pie-chart-outline" size={40} color="#cbd5e1" />
-                    <Text style={styles.emptyTxt}>No data</Text>
+        {loading ? (
+          <SkeletonLoader />
+        ) : (
+          <>
+            <View style={styles.chartCard}>
+              <View style={styles.chartRow}>
+                <View style={styles.piesSection}>
+                  <View style={styles.pieBlock}>
+                    {statusPieData.length > 0 ? (
+                      <CustomPieChart data={statusPieData} size={PIE_SZ} title="Order Status" />
+                    ) : (
+                      <View style={[styles.emptyPie, { width: PIE_SZ, height: PIE_SZ }]}>
+                        <Ionicons name="pie-chart-outline" size={40} color="#cbd5e1" />
+                        <Text style={styles.emptyTxt}>No data</Text>
+                      </View>
+                    )}
                   </View>
-                )}
-              </View>
-              <View style={styles.pieBlock}>
-                {vendorPieData.length > 0 ? (
-                  <CustomPieChart data={vendorPieData} size={PIE_SZ} title="Vendor Share" />
-                ) : (
-                  <View style={[styles.emptyPie, { width: PIE_SZ, height: PIE_SZ }]}>
-                    <Ionicons name="pie-chart-outline" size={40} color="#cbd5e1" />
-                    <Text style={styles.emptyTxt}>No data</Text>
+                  <View style={styles.pieBlock}>
+                    {vendorPieData.length > 0 ? (
+                      <CustomPieChart data={vendorPieData} size={PIE_SZ} title="Vendor Share" />
+                    ) : (
+                      <View style={[styles.emptyPie, { width: PIE_SZ, height: PIE_SZ }]}>
+                        <Ionicons name="pie-chart-outline" size={40} color="#cbd5e1" />
+                        <Text style={styles.emptyTxt}>No data</Text>
+                      </View>
+                    )}
                   </View>
-                )}
-              </View>
-            </View>
-
-            <View style={styles.summaryColumn}>
-              <SummaryCard title={`Total : ${fmt(totalRevenue)}`}   subtitle={`Orders : ${completedOrders.length}`} color="#16a34a" />
-              <SummaryCard title={`COD : ${fmt(codRevenue)}`}       subtitle={`Orders : ${codCount}`}               color="#0891b2" />
-              <SummaryCard title={`Online : ${fmt(onlineRevenue)}`} subtitle={`Orders : ${onlineCount}`}            color="#7c3aed" />
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.tableCard}>
-          <View style={styles.tableHead}>
-            {[
-              { label: 'No',        f: 0.4 },
-              { label: 'Vendor',    f: 1.8 },
-              { label: 'Delivered', f: 0.8 },
-              { label: 'Cancelled', f: 0.8 },
-              { label: 'Total',     f: 1.4 },
-              { label: 'COD',       f: 1.4 },
-              { label: 'Online',    f: 1.4 },
-              { label: 'Actions',   f: 0.9 },
-            ].map(({ label, f }) => (
-              <Text key={label} style={[styles.th, { flex: f }]}>{label}</Text>
-            ))}
-          </View>
-
-          {vendorSummary.length === 0 ? (
-            <View style={styles.tableEmpty}>
-              <Ionicons name="receipt-outline" size={32} color="#cbd5e1" />
-              <Text style={styles.emptyTxt}>No orders found</Text>
-            </View>
-          ) : (
-            vendorSummary.map((v, i) => (
-              <View key={v.vendorName} style={[styles.tableRow, i % 2 === 0 && styles.tableRowAlt]}>
-                <Text style={[styles.td, { flex: 0.4, color: '#94a3b8' }]}>{i + 1}</Text>
-                <Text style={[styles.td, { flex: 1.8, fontWeight: '600', color: '#1e293b' }]}>{v.vendorName}</Text>
-                <Text style={[styles.td, { flex: 0.8, color: '#16a34a', fontWeight: '700' }]}>{v.delivered}</Text>
-                <Text style={[styles.td, { flex: 0.8, color: v.cancelled > 0 ? '#dc2626' : '#94a3b8', fontWeight: '700' }]}>{v.cancelled}</Text>
-
-                <View style={{ flex: 1.4 }}>
-                  <Text style={styles.tdAmt}>{fmt(v.total)}</Text>
-                  <Text style={styles.tdCnt}>({v.totalCount} orders)</Text>
-                </View>
-                <View style={{ flex: 1.4 }}>
-                  <Text style={[styles.tdAmt, { color: '#0891b2' }]}>{fmt(v.cod)}</Text>
-                  <Text style={styles.tdCnt}>({v.codCount} orders)</Text>
-                </View>
-                <View style={{ flex: 1.4 }}>
-                  <Text style={[styles.tdAmt, { color: '#7c3aed' }]}>{fmt(v.online)}</Text>
-                  <Text style={styles.tdCnt}>({v.onlineCount} orders)</Text>
                 </View>
 
-                <View style={{ flex: 0.9, flexDirection: 'row', alignItems: 'center' }}>
-                  <TouchableOpacity
-                    style={styles.actionBtn}
-                    onPress={() => setSelectedVendor(v.vendorName)}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="chevron-forward" size={14} color="white" />
-                  </TouchableOpacity>
+                <View style={styles.summaryColumn}>
+                  <SummaryCard title={`Total : ${fmt(totalRevenue)}`}   subtitle={`Orders : ${completedOrders.length}`} color="#16a34a" />
+                  <SummaryCard title={`COD : ${fmt(codRevenue)}`}       subtitle={`Orders : ${codCount}`}               color="#0891b2" />
+                  <SummaryCard title={`Online : ${fmt(onlineRevenue)}`} subtitle={`Orders : ${onlineCount}`}            color="#7c3aed" />
                 </View>
               </View>
-            ))
-          )}
-        </View>
+            </View>
+
+            <View style={styles.tableCard}>
+              <View style={styles.tableHead}>
+                {[
+                  { label: 'No',        f: 0.4 },
+                  { label: 'Vendor',    f: 1.8 },
+                  { label: 'Delivered', f: 0.8 },
+                  { label: 'Cancelled', f: 0.8 },
+                  { label: 'Total',     f: 1.4 },
+                  { label: 'COD',       f: 1.4 },
+                  { label: 'Online',    f: 1.4 },
+                  { label: 'Actions',   f: 0.9 },
+                ].map(({ label, f }) => (
+                  <Text key={label} style={[styles.th, { flex: f }]}>{label}</Text>
+                ))}
+              </View>
+
+              {vendorSummary.length === 0 ? (
+                <View style={styles.tableEmpty}>
+                  <Ionicons name="receipt-outline" size={32} color="#cbd5e1" />
+                  <Text style={styles.emptyTxt}>No orders found</Text>
+                </View>
+              ) : (
+                vendorSummary.map((v, i) => (
+                  <View key={v.vendorName} style={[styles.tableRow, i % 2 === 0 && styles.tableRowAlt]}>
+                    <Text style={[styles.td, { flex: 0.4, color: '#94a3b8' }]}>{i + 1}</Text>
+                    <Text style={[styles.td, { flex: 1.8, fontWeight: '600', color: '#1e293b' }]}>{v.vendorName}</Text>
+                    <Text style={[styles.td, { flex: 0.8, color: '#16a34a', fontWeight: '700' }]}>{v.delivered}</Text>
+                    <Text style={[styles.td, { flex: 0.8, color: v.cancelled > 0 ? '#dc2626' : '#94a3b8', fontWeight: '700' }]}>{v.cancelled}</Text>
+
+                    <View style={{ flex: 1.4 }}>
+                      <Text style={styles.tdAmt}>{fmt(v.total)}</Text>
+                      <Text style={styles.tdCnt}>({v.totalCount} orders)</Text>
+                    </View>
+                    <View style={{ flex: 1.4 }}>
+                      <Text style={[styles.tdAmt, { color: '#0891b2' }]}>{fmt(v.cod)}</Text>
+                      <Text style={styles.tdCnt}>({v.codCount} orders)</Text>
+                    </View>
+                    <View style={{ flex: 1.4 }}>
+                      <Text style={[styles.tdAmt, { color: '#7c3aed' }]}>{fmt(v.online)}</Text>
+                      <Text style={styles.tdCnt}>({v.onlineCount} orders)</Text>
+                    </View>
+
+                    <View style={{ flex: 0.9, flexDirection: 'row', alignItems: 'center' }}>
+                      <TouchableOpacity
+                        style={styles.actionBtn}
+                        onPress={() => setSelectedVendor(v.vendorName)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="chevron-forward" size={14} color="white" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          </>
+        )}
       </ScrollView>
 
       {(showPeriodDrop || showStatusDrop) && (
