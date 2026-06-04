@@ -107,8 +107,8 @@ const domConfig = {
       selfContained: true,
       labelText: 'Coach / Berth:',
       transform: v => {
-        // "Coach / Berth: S4 / 51" → "S4/51"
-        const m = v.match(/Coach\s*\/\s*Berth:\s*([A-Z0-9]+)\s*\/\s*(\d+)/i);
+        // "Coach / Berth: S4 / 51" → "S4/51" or "RAC/S3 / 55" → "RAC/S3/55"
+        const m = v.match(/Coach\s*\/\s*Berth:\s*([A-Z0-9/]+)\s*\/\s*(\d+)/i);
         return m ? `${m[1]}/${m[2]}` : null;
       },
     },
