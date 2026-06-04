@@ -90,7 +90,7 @@ export default function DailyBusinessScreen({ visible, onClose, clientId }) {
 
           // FIX: removed status === 'Delivered' filter — backend saves orders as 'Active'.
           // Exclude only Cancelled orders so all real orders are counted.
-          if (data.status !== 'Delivered') return;
+          if (data.status !== 'Completed') return;
 
           // FIX: use data.totalAmount directly (saved by backend, includes delivery charges).
           // Fall back to computing from items if totalAmount is missing.
