@@ -201,29 +201,36 @@ const domConfig = {
     }
     delete order._greetingRaw;
 
-    // ── deliveryDate from Journey Date ──────────────────────────────────────
-    // Variants: "YYYY-MM-DD HH:MM" (ISO), "DD-MM-YYYY" (Indian), "DD-MM-YYYY HH:MM"
-    const jd = order._journeyDate || '';
-    let m = jd.match(/^(\d{4})-(\d{2})-(\d{2})/);          // YYYY-MM-DD
-    if (m) {
-      order.deliveryDate = `${m[1]}-${m[2]}-${m[3]}`;
-    } else {
-      m = jd.match(/^(\d{2})-(\d{2})-(\d{4})/);           // DD-MM-YYYY
-      order.deliveryDate = m ? `${m[3]}-${m[2]}-${m[1]}` : null;
-    }
-    delete order._journeyDate;
-
-    // ── deliveryTime from Delivery Time (ETA) → extract HH:MM ─────────────
-    // Format: "May 31,2026 11:54"
+    // ── deliveryDate & deliveryTime from Delivery Time (ETA) ────────────────
+    // Format: "May 31,2026 11:54" or "Jun 04,2026 11:12"
     const dtr = order._deliveryTimeRaw || '';
-    const timeMatch = dtr.match(/(\d{1,2}:\d{2})$/);
-    if (timeMatch) {
-      const t = timeMatch[1];
+    const etaMatch = dtr.match(/^([A-Za-z]{3})\s+(\d{1,2}),(\d{4})\s+(\d{1,2}:\d{2})$/);
+    if (etaMatch) {
+      const monthMap = {
+        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+        'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+        'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12',
+      };
+      const month = etaMatch[1].toLowerCase().slice(0, 3);
+      const day = etaMatch[2].padStart(2, '0');
+      const year = etaMatch[3];
+      order.deliveryDate = `${year}-${monthMap[month] || '01'}-${day}`;
+      const t = etaMatch[4];
       order.deliveryTime = t.length === 4 ? '0' + t : t;
     } else {
+      // Fallback: parse deliveryDate from Journey Date if ETA missing
+      const jd = order._journeyDate || '';
+      let m = jd.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) {
+        order.deliveryDate = `${m[1]}-${m[2]}-${m[3]}`;
+      } else {
+        m = jd.match(/^(\d{2})-(\d{2})-(\d{4})/);
+        order.deliveryDate = m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+      }
       order.deliveryTime = null;
     }
     delete order._deliveryTimeRaw;
+    delete order._journeyDate;
 
     // ── Qty cross-check ────────────────────────────────────────────────────
     if (order.items && Array.isArray(order.items)) {
