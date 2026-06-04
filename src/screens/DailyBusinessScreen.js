@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Platform, Modal, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Platform, Modal, TouchableOpacity, TouchableWithoutFeedback, Animated } from 'react-native';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { db } from '../firebaseConfig';
@@ -19,6 +19,39 @@ const toDisplayStr = (dateStr) => {
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Skeleton Loader
+// ─────────────────────────────────────────────────────────────────────────────
+const SkeletonStatRow = () => {
+  const shimmer = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+
+  return (
+    <View style={{ paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Animated.View style={{ height: 12, borderRadius: 4, backgroundColor: '#e2e8f0', opacity, width: '55%' }} />
+      <Animated.View style={{ height: 12, borderRadius: 4, backgroundColor: '#e2e8f0', opacity, width: '25%' }} />
+    </View>
+  );
+};
+
+const SkeletonLoader = () => (
+  <View>
+    {Array.from({ length: 4 }).map((_, i) => (
+      <SkeletonStatRow key={i} />
+    ))}
+  </View>
+);
 
 export default function DailyBusinessScreen({ visible, onClose, clientId }) {
   const [loading, setLoading] = useState(true);
@@ -132,7 +165,7 @@ export default function DailyBusinessScreen({ visible, onClose, clientId }) {
 
               {/* Stats */}
               {loading ? (
-                <View style={styles.loadingRow}><ActivityIndicator size="small" color="#0f172a" /></View>
+                <SkeletonLoader />
               ) : (
                 <>
                   <View style={styles.statRow}>
