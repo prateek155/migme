@@ -800,8 +800,11 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         // Capture footer total if configured and this row matches the capture label
         if (domConfig.itemsTable.captureFooterTotal) {
           const captureLabel = domConfig.itemsTable.captureFooterTotal.toLowerCase();
-          if (firstText.toLowerCase().includes(captureLabel) ||
-              secondText.toLowerCase().includes(captureLabel)) {
+          // Use startsWith (normalized) so "Total" doesn't match "Subtotal"
+          // but still matches "Grand Total (Inclusive of all taxes)" (Yatri Restro)
+          const normalizeFooter = s => s.toLowerCase().replace(/:+$/g, '').trim();
+          if (normalizeFooter(firstText).startsWith(captureLabel) ||
+              normalizeFooter(secondText).startsWith(captureLabel)) {
             const lastCell = cells.last();
             order._itemsTotal = parseFloat(lastCell.text().replace(/[^\d.]/g, '')) || 0;
             log(`${tag} Captured _itemsTotal: ${order._itemsTotal}`);
