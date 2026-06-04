@@ -164,7 +164,9 @@ const backendAuthReady = (async function authBackend() {
       password: crypto.randomBytes(24).toString('hex'),
     });
   }
-  const token        = await authAdmin.createCustomToken(BACKEND_AUTH_UID);
+  const token = await authAdmin.createCustomToken(BACKEND_AUTH_UID, {
+  email: 'backend@migme.internal',
+   });
   const authInstance = getAuth(firebaseApp);
   await signInWithCustomToken(authInstance, token);
   log('Backend Firestore client authenticated');
