@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Platform,
-  TouchableOpacity, TextInput, ScrollView, Modal, Dimensions
+  TouchableOpacity, TextInput, ScrollView, Modal, Dimensions,  Animated 
 } from 'react-native';
 import { collection, onSnapshot, query, where, updateDoc, doc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
@@ -340,6 +340,55 @@ const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, on
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Skeleton Loader
+// ─────────────────────────────────────────────────────────────────────────────
+const SkeletonRow = () => {
+  const shimmer = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+
+  const Box = ({ w, flex }) => (
+    <Animated.View style={{
+      height: 12, borderRadius: 4, backgroundColor: '#e2e8f0',
+      opacity, ...(flex ? { flex } : { width: w }),
+    }} />
+  );
+
+  return (
+    <View style={[styles.tableRow, { gap: 12 }]}>
+      <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#e2e8f0', opacity: 0.5 }} />
+      <Box flex={0.8} />
+      <Box flex={1.1} />
+      <Box flex={1.0} />
+      <Box flex={0.8} />
+      <Box flex={1.2} />
+      <Box flex={1.2} />
+      <Box flex={0.9} />
+      <Box flex={1.2} />
+    </View>
+  );
+};
+
+const SkeletonLoader = () => (
+  <View style={{ flex: 1 }}>
+    {Array.from({ length: 10 }).map((_, i) => (
+      <View key={i} style={{ borderBottomWidth: 1, borderColor: '#f1f5f9' }}>
+        <SkeletonRow />
+      </View>
+    ))}
+  </View>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Screen
 // ─────────────────────────────────────────────────────────────────────────────
 export default function FilteredOrdersScreen({ statusFilter, title, clientId }) {
@@ -534,11 +583,9 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           <Text style={[styles.col, { flex: 1.2 }]}>DELIVERY EXEC</Text>
         </View>
 
-        {loading ? (
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ color: '#94a3b8', fontSize: 14 }}>Loading…</Text>
-          </View>
-        ) : filteredOrders.length === 0 ? (
+         {loading ? (
+           <SkeletonLoader />
+          ) : filteredOrders.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
             <Text style={styles.emptyStateText}>
