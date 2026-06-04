@@ -1,14 +1,66 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, SectionList, StyleSheet, Modal } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, SectionList, StyleSheet, Modal, Animated } from 'react-native';
 import { collection, addDoc, onSnapshot, deleteDoc, doc, query, where, updateDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Skeleton Loader
+// ─────────────────────────────────────────────────────────────────────────────
+const SkeletonRow = ({ alt }) => {
+  const shimmer = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+
+  const Box = ({ flex }) => (
+    <Animated.View style={{
+      height: 12, borderRadius: 4, backgroundColor: '#e2e8f0',
+      opacity, flex,
+    }} />
+  );
+
+  return (
+    <View style={[{
+      flexDirection: 'row', paddingVertical: 18, paddingHorizontal: 16,
+      borderBottomWidth: 1, borderBottomColor: '#f1f5f9',
+      alignItems: 'center', gap: 12,
+    }, alt && { backgroundColor: '#fafafa' }]}>
+      <Box flex={0.6} />
+      <Box flex={2} />
+      <Box flex={1.4} />
+      <Box flex={1} />
+      <Box flex={1.2} />
+      <Box flex={1.2} />
+    </View>
+  );
+};
+
+const SkeletonLoader = () => (
+  <View>
+    {Array.from({ length: 8 }).map((_, i) => (
+      <SkeletonRow key={i} alt={i % 2 !== 0} />
+    ))}
+  </View>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen
+// ─────────────────────────────────────────────────────────────────────────────
 export default function MenuScreen({ clientId }) {
   const [categories, setCategories]     = useState([]);
   const [menuItems, setMenuItems]       = useState([]);
   const [search, setSearch]             = useState('');
+  const [loading, setLoading]           = useState(true);
 
   // Add Category modal
   const [catModalVisible, setCatModalVisible]   = useState(false);
@@ -37,14 +89,20 @@ export default function MenuScreen({ clientId }) {
   // ── Firebase ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!clientId) return;
+    let catsLoaded = false, itemsLoaded = false;
+
     const catUnsub = onSnapshot(query(collection(db, 'categories'), where('clientId', '==', clientId)), (snap) => {
       const cats = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       setCategories(cats);
       if (cats.length > 0 && !selectedCategory) setSelectedCategory(cats[0].id);
+      catsLoaded = true;
+      if (itemsLoaded) setLoading(false);
     });
 
     const menuUnsub = onSnapshot(query(collection(db, 'menuItems'), where('clientId', '==', clientId)), (snap) => {
       setMenuItems(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      itemsLoaded = true;
+      if (catsLoaded) setLoading(false);
     });
 
     return () => { catUnsub(); menuUnsub(); };
@@ -204,71 +262,75 @@ export default function MenuScreen({ clientId }) {
           <Text style={[styles.th, { flex: 1.2 }]}>Actions</Text>
         </View>
 
-        {/* Alphabetical Sections */}
-        <SectionList
-          sections={sections}
-          keyExtractor={item => item.id}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 40 }}
-          stickySectionHeadersEnabled={true}
+        {/* Skeleton or Sections */}
+        {loading ? (
+          <SkeletonLoader />
+        ) : (
+          <SectionList
+            sections={sections}
+            keyExtractor={item => item.id}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 40 }}
+            stickySectionHeadersEnabled={true}
 
-          // ── Category Divider Header ──
-          renderSectionHeader={({ section }) => {
-            const cat = categories.find(c => c.name === section.title);
-            return (
-              <View style={styles.sectionHeader}>
-                <View style={styles.sectionCategoryBadge}>
-                  <Text style={styles.sectionCategoryText}>{section.title}</Text>
+            // ── Category Divider Header ──
+            renderSectionHeader={({ section }) => {
+              const cat = categories.find(c => c.name === section.title);
+              return (
+                <View style={styles.sectionHeader}>
+                  <View style={styles.sectionCategoryBadge}>
+                    <Text style={styles.sectionCategoryText}>{section.title}</Text>
+                  </View>
+                  <View style={styles.sectionDividerLine} />
+                  <Text style={styles.sectionCount}>
+                    {section.data.length} item{section.data.length !== 1 ? 's' : ''}
+                  </Text>
+                  {cat && (
+                    <TouchableOpacity style={styles.catEditBtn} onPress={() => handleEditCategory(cat)}>
+                      <Ionicons name="pencil" size={12} color="#475569" />
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={styles.sectionDividerLine} />
-                <Text style={styles.sectionCount}>
-                  {section.data.length} item{section.data.length !== 1 ? 's' : ''}
-                </Text>
-                {cat && (
-                  <TouchableOpacity style={styles.catEditBtn} onPress={() => handleEditCategory(cat)}>
-                    <Ionicons name="pencil" size={12} color="#475569" />
-                  </TouchableOpacity>
-                )}
+              );
+            }}
+
+            // ── Row ──
+            renderItem={({ item, index }) => {
+              const catName = categories.find(c => c.id === item.categoryId)?.name || 'Unknown';
+              const veg = item.isVeg !== false;
+              const srNo = serialMap[item.id];
+              return (
+                <View style={[styles.tableRow, index % 2 !== 0 && styles.tableRowAlt]}>
+                  <Text style={[styles.td, styles.tdBold, { flex: 0.6 }]}>{srNo}</Text>
+                  <Text style={[styles.td, styles.tdBold, { flex: 2 }]}>{item.name}</Text>
+                  <Text style={[styles.td, styles.tdBold, { flex: 1.4 }]}>{catName}</Text>
+                  <Text style={[styles.td, styles.tdBold, { flex: 1 }]}>₹ {item.price}</Text>
+                  <View style={[styles.tdCell, { flex: 1.2, justifyContent: 'center' }]}>
+                    <View style={[styles.vegDot, { backgroundColor: veg ? '#16a34a' : '#dc2626' }]} />
+                  </View>
+                  <View style={[styles.tdCell, { flex: 1.2, gap: 8, justifyContent: 'center' }]}>
+                    <TouchableOpacity style={styles.editBtn} onPress={() => handleEditItem(item)}>
+                      <Ionicons name="pencil" size={13} color="white" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.deleteBtn}
+                      onPress={() => handleDelete('menuItems', item.id)}
+                    >
+                      <Ionicons name="trash" size={13} color="white" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            }}
+
+            ListEmptyComponent={
+              <View style={styles.emptyRow}>
+                <Ionicons name="restaurant-outline" size={28} color="#cbd5e1" />
+                <Text style={styles.emptyText}>No menu items yet. Click + MENU ITEM to add one.</Text>
               </View>
-            );
-          }}
-
-          // ── Row ──
-          renderItem={({ item, index }) => {
-            const catName = categories.find(c => c.id === item.categoryId)?.name || 'Unknown';
-            const veg = item.isVeg !== false;
-            const srNo = serialMap[item.id];
-            return (
-              <View style={[styles.tableRow, index % 2 !== 0 && styles.tableRowAlt]}>
-                <Text style={[styles.td, styles.tdBold, { flex: 0.6 }]}>{srNo}</Text>
-                <Text style={[styles.td, styles.tdBold, { flex: 2 }]}>{item.name}</Text>
-                <Text style={[styles.td, styles.tdBold, { flex: 1.4 }]}>{catName}</Text>
-                <Text style={[styles.td, styles.tdBold, { flex: 1 }]}>₹ {item.price}</Text>
-                <View style={[styles.tdCell, { flex: 1.2, justifyContent: 'center' }]}>
-                  <View style={[styles.vegDot, { backgroundColor: veg ? '#16a34a' : '#dc2626' }]} />
-                </View>
-                <View style={[styles.tdCell, { flex: 1.2, gap: 8, justifyContent: 'center' }]}>
-                  <TouchableOpacity style={styles.editBtn} onPress={() => handleEditItem(item)}>
-                    <Ionicons name="pencil" size={13} color="white" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.deleteBtn}
-                    onPress={() => handleDelete('menuItems', item.id)}
-                  >
-                    <Ionicons name="trash" size={13} color="white" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            );
-          }}
-
-          ListEmptyComponent={
-            <View style={styles.emptyRow}>
-              <Ionicons name="restaurant-outline" size={28} color="#cbd5e1" />
-              <Text style={styles.emptyText}>No menu items yet. Click + MENU ITEM to add one.</Text>
-            </View>
-          }
-        />
+            }
+          />
+        )}
       </View>
 
       {/* ── Add Category Modal ── */}
