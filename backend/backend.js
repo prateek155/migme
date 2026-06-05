@@ -1222,7 +1222,7 @@ function buildChangePayload(existingOrder, updateResult) {
 //   variable inside runPollingCycle — they become dead code.
 //   Optionally fill in markEmailAsRead() to mark emails as read after saving.
 // ═══════════════════════════════════════════════════════════════════════════
-const FETCH_SINCE_FIXED = new Date('2026-05-29T22:30:00.000Z');
+const FETCH_SINCE_FIXED = new Date('2026-06-05T18:00:00.000Z');
 
 function getFetchSince() {
   const rollingWindow = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
