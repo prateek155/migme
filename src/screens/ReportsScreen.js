@@ -82,7 +82,6 @@ const normalizeVendor = (name) => {
 
 // ─── Extract Order ID from a row (robust, handles any column name) ────────────
 const extractOrderId = (row) => {
-  // Try exact known keys first
   const knownKeys = [
     'Order ID', 'ORDER ID', 'OrderId', 'order_id',
     'Order No', 'ORDER NO', 'OrderNo', 'order_no',
@@ -94,7 +93,6 @@ const extractOrderId = (row) => {
       return String(row[key]).trim();
     }
   }
-  // Fallback: fuzzy match — find any key whose lowercase contains 'order' or 'id' or 'no'
   const keys = Object.keys(row);
   for (const key of keys) {
     const lk = key.toLowerCase().replace(/[\s_\-\.]/g, '');
@@ -107,7 +105,6 @@ const extractOrderId = (row) => {
       if (val && val !== 'undefined') return val;
     }
   }
-  // Last resort: return first non-empty cell value
   for (const key of keys) {
     const val = String(row[key]).trim();
     if (val && val !== 'undefined' && val !== '') return val;
@@ -175,14 +172,11 @@ const SkeletonSummaryCard = () => {
 
 const SkeletonLoader = () => (
   <>
-    {/* Summary cards skeleton */}
     <View style={{ flexDirection: 'row', gap: 12, marginBottom: 14 }}>
       <SkeletonSummaryCard />
       <SkeletonSummaryCard />
       <SkeletonSummaryCard />
     </View>
-
-    {/* Table skeleton */}
     <View style={[styles.tableCard, { overflow: 'hidden' }]}>
       <View style={{ backgroundColor: '#0f172a', height: 44 }} />
       {Array.from({ length: 7 }).map((_, i) => (
@@ -608,7 +602,6 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
 
-      // ── Read with header:1 to see raw rows and debug column names ──
       const rawJson = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
       if (rawJson.length === 0) {
@@ -616,18 +609,15 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
         return;
       }
 
-      // ── Log all column names for debugging ──
       const allKeys = Object.keys(rawJson[0]);
       console.log('📋 Excel columns found:', allKeys);
       console.log('📋 First row sample:', rawJson[0]);
 
-      // ── Extract order IDs using robust extractor ──
       const ids = rawJson
         .map(row => extractOrderId(row))
         .filter(id => id && id.trim() !== '' && id !== 'undefined');
 
       if (ids.length === 0) {
-        // Show actual column names to help user
         const colList = allKeys.slice(0, 6).join('", "');
         showToast(
           `Could not find Order ID column. Your file has columns: "${colList}". Please rename one of them to "Order ID" or "Order No".`,
@@ -636,7 +626,6 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
         return;
       }
 
-      // ── Find which column was actually used ──
       const firstRow = rawJson[0];
       let usedColumn = allKeys[0];
       for (const key of allKeys) {
@@ -687,12 +676,20 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
     }
   };
 
+  // ── FIX 2: Summary cards count all orders (including cancelled) when statusFilter = 'All' ──
   const allCompleted  = orders.filter(o => o.status === 'Completed' || o.status === 'Delivered');
-  const totalRevenue  = allCompleted.reduce((s, o) => s + (o.totalAmount || 0), 0);
-  const codRevenue    = allCompleted.filter(o => normPayment(o.paymentType) === 'COD').reduce((s, o) => s + (o.totalAmount || 0), 0);
-  const onlineRevenue = allCompleted.filter(o => normPayment(o.paymentType) === 'ONLINE').reduce((s, o) => s + (o.totalAmount || 0), 0);
-  const codCount      = allCompleted.filter(o => normPayment(o.paymentType) === 'COD').length;
-  const onlineCount   = allCompleted.filter(o => normPayment(o.paymentType) === 'ONLINE').length;
+  const completedForCalc = statusFilter === 'All'
+    ? orders.filter(o => o.status === 'Completed' || o.status === 'Delivered')
+    : allCompleted;
+  const totalRevenue  = completedForCalc.reduce((s, o) => s + (o.totalAmount || 0), 0);
+  const codRevenue    = completedForCalc.filter(o => normPayment(o.paymentType) === 'COD').reduce((s, o) => s + (o.totalAmount || 0), 0);
+  const onlineRevenue = completedForCalc.filter(o => normPayment(o.paymentType) === 'ONLINE').reduce((s, o) => s + (o.totalAmount || 0), 0);
+  const codCount      = completedForCalc.filter(o => normPayment(o.paymentType) === 'COD').length;
+  const onlineCount   = completedForCalc.filter(o => normPayment(o.paymentType) === 'ONLINE').length;
+  // Total order count includes cancelled when 'All' is selected
+  const totalOrderCount = statusFilter === 'All'
+    ? orders.filter(o => o.status === 'Completed' || o.status === 'Delivered' || o.status === 'Cancelled').length
+    : allCompleted.length;
 
   const displayOrders = orders.filter(o => {
     const q            = search.toLowerCase();
@@ -709,8 +706,15 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
     return matchPayment && matchStatus && matchSearch;
   });
 
+  // ── FIX 1: Outer ScrollView so page scrolls even when compare panel is open ──
   return (
-    <View style={{ flex: 1 }}>
+    <ScrollView
+      style={{ flex: 1 }}
+      showsVerticalScrollIndicator={true}
+      showsHorizontalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      nestedScrollEnabled
+    >
       {/* ── Top action bar ── */}
       <View style={vStyles.headerBar}>
         <TouchableOpacity style={vStyles.backBtn} onPress={onBack} activeOpacity={0.8}>
@@ -786,7 +790,8 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
       <View style={vStyles.summaryRow}>
         <View style={[vStyles.summaryCard, { backgroundColor: '#16a34a' }]}>
           <Text style={vStyles.summaryTitle}>Total : {fmt(totalRevenue)}</Text>
-          <Text style={vStyles.summarySubtitle}>Orders : {allCompleted.length}</Text>
+          {/* FIX 2: show totalOrderCount which includes cancelled when 'All' */}
+          <Text style={vStyles.summarySubtitle}>Orders : {totalOrderCount}</Text>
         </View>
         <View style={[vStyles.summaryCard, { backgroundColor: '#0891b2' }]}>
           <Text style={vStyles.summaryTitle}>COD : {fmt(codRevenue)}</Text>
@@ -805,7 +810,7 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
       )}
 
       {/* ── Order table ── */}
-      <View style={vStyles.tableContainer}>
+      <View style={[vStyles.tableContainer, { minHeight: 400 }]}>
         <View style={vStyles.tableHeader}>
           <View style={{ width: 38 }} />
           <Text style={[vStyles.col, { flex: 0.9 }]}>STATUS</Text>
@@ -818,12 +823,8 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
           <Text style={[vStyles.col, { flex: 0.9 }]}>AMOUNT</Text>
         </View>
 
-        {/* ── Rows with hidden scrollbar ── */}
-        <ScrollView
-          style={{ flex: 1 }}
-          showsVerticalScrollIndicator={false}
-          showsHorizontalScrollIndicator={false}
-        >
+        {/* ── Rows — plain View, outer ScrollView handles scroll ── */}
+        <View>
           {displayOrders.length === 0 ? (
             <View style={{ paddingVertical: 48, alignItems: 'center', gap: 10 }}>
               <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
@@ -834,9 +835,9 @@ const VendorDetailView = ({ vendor, orders, onBack, onExport, statusFilter }) =>
               <ExpandableOrderRow key={item.id} item={item} />
             ))
           )}
-        </ScrollView>
+        </View>
       </View>
-    </View>
+    </ScrollView>
   );
 };
 
@@ -1038,6 +1039,7 @@ export default function ReportsScreen({ clientId }) {
     return matchMode && matchStatus && matchSearch;
   });
 
+  // ── FIX 3: Sort vendor summary by total order count (delivered + cancelled) descending ──
   const vendorSummary = (() => {
     const map = {};
     displayOrders.forEach(o => {
@@ -1057,7 +1059,9 @@ export default function ReportsScreen({ clientId }) {
       if (pm === 'COD')    { map[v].cod    += amt; map[v].codCount++;    }
       if (pm === 'ONLINE') { map[v].online += amt; map[v].onlineCount++; }
     });
-    return Object.values(map).sort((a, b) => b.total - a.total);
+    return Object.values(map).sort(
+      (a, b) => (b.delivered + b.cancelled) - (a.delivered + a.cancelled)
+    );
   })();
 
   const completedOrders = displayOrders.filter(o => o.status === 'Completed');
@@ -1087,6 +1091,7 @@ export default function ReportsScreen({ clientId }) {
       .sort((a, b) => b.population - a.population);
   })();
 
+  // ── FIX 4: Always export as .xlsx with explicit bookType ──
   const exportExcel = async (vendorFilter = null) => {
     try {
       const rows = vendorFilter
@@ -1137,7 +1142,8 @@ export default function ReportsScreen({ clientId }) {
       const filename = `Report${vendorPart}${dateRangePart}.xlsx`;
 
       if (Platform.OS === 'web') {
-        XLSX.writeFile(workbook, filename);
+        // FIX 4: explicit bookType: 'xlsx' ensures .xlsx always, never CSV
+        XLSX.writeFile(workbook, filename, { bookType: 'xlsx' });
       } else {
         const wbout = XLSX.write(workbook, { type: 'base64', bookType: 'xlsx' });
         const uri   = FileSystem.documentDirectory + filename;
@@ -1581,8 +1587,9 @@ const vStyles = StyleSheet.create({
   summarySubtitle: { fontSize: 13, color: 'rgba(255,255,255,0.9)', fontWeight: '600' },
 
   tableContainer: {
-    flex: 1, backgroundColor: 'white', borderRadius: 10,
+    backgroundColor: 'white', borderRadius: 10,
     borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden',
+    marginBottom: 16,
   },
   tableHeader: {
     flexDirection: 'row', backgroundColor: '#0f172a',
