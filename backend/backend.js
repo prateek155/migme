@@ -1065,6 +1065,55 @@ function validateOrderData(data, vendorType) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// AI — FILL MISSING FIELDS FROM DOM PARSE
+// ── When DOM parser gets most fields right but misses a few (e.g. deliveryDate
+//    format changed), send a TARGETED AI prompt asking only for those missing
+//    fields. Saves cost vs re-processing the entire email through AI.
+// ═══════════════════════════════════════════════════════════════════════════
+async function fillMissingFields(emailText, missingFieldsStr, tag) {
+  const fieldDescriptions = {
+    deliveryDate: 'deliveryDate in YYYY-MM-DD format (e.g. 2026-06-06)',
+    deliveryTime: 'deliveryTime in HH:MM 24-hour format (e.g. 15:20)',
+    customerName: 'customerName (full name of the person who placed the order)',
+    trainInfo: 'trainInfo (train number and name, e.g. 22932 / JSM BDTS SF EXP)',
+    coach: 'coach (coach/berth number, e.g. B4/63)',
+    contactNo: 'contactNo (10-digit mobile number)',
+    orderNo: 'orderNo (order reference number)',
+    paymentType: 'paymentType (COD or Prepaid)',
+    items: 'items (array of {name, quantity, price})',
+    totalAmount: 'totalAmount (total order value as number)',
+    tax: 'tax (GST/tax amount as number)',
+  };
+
+  const fieldList = missingFieldsStr.split(', ').map(f => fieldDescriptions[f] || f).join(', ');
+
+  const prompt = `Extract ONLY the following fields from this train food delivery order email.
+Return a SINGLE VALID JSON object containing ONLY these fields — no extra fields, no markdown formatting, no explanation.
+
+Fields to extract: ${fieldList}
+
+Rules:
+- deliveryDate must be YYYY-MM-DD format
+- deliveryTime must be HH:MM 24-hour format
+- items must be an array of {name: string, quantity: number, price: number}
+- totalAmount, tax must be plain numbers (not strings)
+- If a field is not found in the email, set it to null
+
+Email:
+${emailText}`;
+
+  const result = await callBedrockWithRetry(prompt);
+  if (!result) return null;
+  try { return JSON.parse(result); } catch (_) {}
+  const m = result.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (m) { try { return JSON.parse(m[1]); } catch (_) {} }
+  const obj = result.match(/\{[\s\S]*\}/);
+  if (obj) { try { return JSON.parse(obj[0]); } catch (_) {} }
+  warn(`${tag} fillMissingFields: could not parse AI response as JSON`);
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // AI — PARSE NEW ORDER EMAIL
 // ═══════════════════════════════════════════════════════════════════════════
 async function parseWithAWS(rawText, subject, senderEmail) {
@@ -1222,7 +1271,7 @@ function buildChangePayload(existingOrder, updateResult) {
 //   variable inside runPollingCycle — they become dead code.
 //   Optionally fill in markEmailAsRead() to mark emails as read after saving.
 // ═══════════════════════════════════════════════════════════════════════════
-const FETCH_SINCE_FIXED = new Date('2026-06-05T18:00:00.000Z');
+const FETCH_SINCE_FIXED = new Date('2026-06-06T13:30:00.000Z');
 
 function getFetchSince() {
   const rollingWindow = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
@@ -1350,6 +1399,27 @@ async function processEmail(
       orderData = parseDomOrder(parsed.html, detectedName, detectedType, domCfg, tag);
       if (orderData) {
         log(`${tag}    ✅ DOM parse succeeded — Bedrock not called`);
+        // ── Check if DOM got most fields but some are missing ──────────
+        const missingFields = getMissingFields(orderData);
+        if (missingFields) {
+          log(`${tag}    🔄 DOM partial — filling missing: [${missingFields}] via targeted AI`);
+          const fill = await fillMissingFields(fullText, missingFields, tag);
+          if (fill) {
+            let merged = 0;
+            for (const [key, val] of Object.entries(fill)) {
+              if (val !== null && val !== undefined && val !== '' && val !== 'N/A') {
+                const current = orderData[key];
+                if (current === null || current === undefined || current === '' || current === 'N/A' || current === 'Unknown' || current === 'YYYY-MM-DD') {
+                  orderData[key] = val;
+                  merged++;
+                }
+              }
+            }
+            log(`${tag}    ✅ AI filled ${merged}/${missingFields.split(', ').length} missing fields`);
+          } else {
+            warn(`${tag}    ⚠️  AI fill failed — fields will remain missing, retry on next cycle`);
+          }
+        }
       } else {
         warn(`${tag}    ⚠️  DOM parse failed — falling back to AI`);
       }
