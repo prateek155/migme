@@ -143,15 +143,28 @@ const domConfig = {
 
   postProcess(order) {
     // ── Parse _deliveryRaw → deliveryDate + deliveryTime ───────────────────
-    // Format: "31-05-2026, 11:53"  (DD-MM-YYYY, HH:MM)
+    // Supports two formats:
+    //   1) "DD-MM-YYYY, HH:MM"  (e.g. "31-05-2026, 11:53")
+    //   2) Full JS Date string  (e.g. "Sat Jun 06 2026 15:20:00 GMT+0000 ...")
     const raw = order._deliveryRaw || '';
-    const m = raw.match(/(\d{2})-(\d{2})-(\d{4}),?\s*(\d{1,2}:\d{2})/);
+    let m = raw.match(/(\d{2})-(\d{2})-(\d{4}),?\s*(\d{1,2}:\d{2})/);
     if (m) {
       order.deliveryDate = `${m[3]}-${m[2]}-${m[1]}`;  // YYYY-MM-DD
       order.deliveryTime = m[4].length === 4 ? '0' + m[4] : m[4];
     } else {
-      order.deliveryDate = null;
-      order.deliveryTime = null;
+      const d = new Date(raw);
+      if (!isNaN(d.getTime())) {
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const hh = String(d.getHours()).padStart(2, '0');
+        const min = String(d.getMinutes()).padStart(2, '0');
+        order.deliveryDate = `${yyyy}-${mm}-${dd}`;
+        order.deliveryTime = `${hh}:${min}`;
+      } else {
+        order.deliveryDate = null;
+        order.deliveryTime = null;
+      }
     }
     delete order._deliveryRaw;
 
