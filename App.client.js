@@ -29,11 +29,11 @@ export default function App() {
   const [user, setUser]                       = useState(null);
   const [loading, setLoading]                 = useState(true);
   const [showHome, setShowHome]               = useState(true);
-  const [currentScreen, setCurrentScreen]     = useState('Dashboard');
+  const [currentScreen, setCurrentScreen]     = useState(() => localStorage.getItem('current_screen') || 'Dashboard');
   const [dailyBizVisible, setDailyBizVisible] = useState(false);
 
   // Sidebar collapsed state (desktop only)
-  const [collapsed, setCollapsed]             = useState(false);
+  const [collapsed, setCollapsed]             = useState(() => localStorage.getItem('sidebar_collapsed') === 'true');
   // Mobile sidebar open state
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -91,7 +91,7 @@ export default function App() {
     if (isMobile) {
       setMobileSidebarOpen(v => !v);
     } else {
-      setCollapsed(v => !v);
+      setCollapsed(v => { const n = !v; localStorage.setItem('sidebar_collapsed', n); return n; });
     }
   };
 
@@ -122,6 +122,7 @@ export default function App() {
     setUser(null);
     setShowHome(true);
     setCurrentScreen('Dashboard');
+    localStorage.removeItem('current_screen');
     setMobileSidebarOpen(false);
     try { await signOut(auth); } catch (_) {}
     await AsyncStorage.removeItem('migme_user');
@@ -225,7 +226,7 @@ export default function App() {
     return (
       <TouchableOpacity
         style={[styles.navItem, isActive && styles.navItemActiveWhite]}
-        onPress={() => { setCurrentScreen(screen); closeMobile(); }}
+        onPress={() => { setCurrentScreen(screen); localStorage.setItem('current_screen', screen); closeMobile(); }}
         activeOpacity={0.75}
       >
         {isActive && <View style={[styles.activePill, { backgroundColor: '#4ade80' }]} />}
