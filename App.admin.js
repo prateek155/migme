@@ -23,11 +23,11 @@ const MOBILE_BP         = 768;
 export default function App() {
   const [user, setUser]                       = useState(null);
   const [loading, setLoading]                 = useState(true);
-  const [adminScreen, setAdminScreen]         = useState('Dashboard');
+  const [adminScreen, setAdminScreen]         = useState(() => localStorage.getItem('admin_screen') || 'Dashboard');
   const [adminParams, setAdminParams]         = useState(null);
 
   // Sidebar collapsed state (desktop only)
-  const [collapsed, setCollapsed]             = useState(false);
+  const [collapsed, setCollapsed]             = useState(() => localStorage.getItem('sidebar_collapsed') === 'true');
   // Mobile sidebar open state
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -85,7 +85,7 @@ export default function App() {
     if (isMobile) {
       setMobileSidebarOpen(v => !v);
     } else {
-      setCollapsed(v => !v);
+      setCollapsed(v => { const n = !v; localStorage.setItem('sidebar_collapsed', n); return n; });
     }
   };
 
@@ -114,6 +114,7 @@ export default function App() {
   const handleLogout = async () => {
     setUser(null);
     setAdminScreen('Dashboard');
+    localStorage.removeItem('admin_screen');
     setMobileSidebarOpen(false);
     try { await signOut(auth); } catch (_) {}
     await AsyncStorage.removeItem('migme_user');
@@ -195,11 +196,11 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════════════════════
     const renderAdminContent = () => {
       switch (adminScreen) {
-        case 'Dashboard':    return <AdminDashboardScreen onNavigate={(s, p) => { setAdminScreen(s); setAdminParams(p); }} onLogout={handleLogout} />;
-        case 'AddClient':    return <AddClientScreen onBack={() => setAdminScreen('Dashboard')} />;
-        case 'ClientDetail': return <ClientDetailScreen client={adminParams?.client} onBack={() => setAdminScreen('Dashboard')} />;
-        case 'DataManagement': return <DataManagementScreen onBack={() => setAdminScreen('Dashboard')} />;
-        default:             return <AdminDashboardScreen onNavigate={s => setAdminScreen(s)} onLogout={handleLogout} />;
+        case 'Dashboard':    return <AdminDashboardScreen onNavigate={(s, p) => { setAdminScreen(s); localStorage.setItem('admin_screen', s); setAdminParams(p); }} onLogout={handleLogout} />;
+        case 'AddClient':    return <AddClientScreen onBack={() => { setAdminScreen('Dashboard'); localStorage.setItem('admin_screen', 'Dashboard'); }} />;
+        case 'ClientDetail': return <ClientDetailScreen client={adminParams?.client} onBack={() => { setAdminScreen('Dashboard'); localStorage.setItem('admin_screen', 'Dashboard'); }} />;
+        case 'DataManagement': return <DataManagementScreen onBack={() => { setAdminScreen('Dashboard'); localStorage.setItem('admin_screen', 'Dashboard'); }} />;
+        default:             return <AdminDashboardScreen onNavigate={s => { setAdminScreen(s); localStorage.setItem('admin_screen', s); }} onLogout={handleLogout} />;
       }
     };
 
@@ -208,7 +209,7 @@ export default function App() {
       return (
         <TouchableOpacity
           style={[styles.navItem, isActive && styles.navItemActiveWhite]}
-          onPress={() => { setAdminScreen(screen); closeMobile(); }}
+          onPress={() => { setAdminScreen(screen); localStorage.setItem('admin_screen', screen); closeMobile(); }}
           activeOpacity={0.75}
         >
           {isActive && <View style={[styles.activePill, { backgroundColor: '#4ade80' }]} />}
