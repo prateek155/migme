@@ -613,7 +613,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // ═══════════════════════════════════════════════════════════════════════════
 // VENDOR REGISTRY
 // ═══════════════════════════════════════════════════════════════════════════
-const { VENDOR_MAP, VENDOR_RULES, VENDOR_DOM_CONFIGS } = require('./vendor-rules');
+const { VENDOR_MAP, VENDOR_RULES, VENDOR_DOM_CONFIGS, VENDOR_SKIP_SUBJECTS } = require('./vendor-rules');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -1271,7 +1271,7 @@ function buildChangePayload(existingOrder, updateResult) {
 //   variable inside runPollingCycle — they become dead code.
 //   Optionally fill in markEmailAsRead() to mark emails as read after saving.
 // ═══════════════════════════════════════════════════════════════════════════
-const FETCH_SINCE_FIXED = new Date('2026-06-06T13:30:00.000Z');
+const FETCH_SINCE_FIXED = new Date('2026-06-12T19:30:00.000Z');
 
 function getFetchSince() {
   const rollingWindow = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
@@ -1365,6 +1365,18 @@ async function processEmail(
         const root  = parts.length > 2 ? parts[parts.length - 2] : parts[0];
         detectedName = root.charAt(0).toUpperCase() + root.slice(1);
       } catch (_) {}
+    }
+
+    // ── Skip known-fake subjects per vendor ────────────────────────────────
+    const skipPatterns = VENDOR_SKIP_SUBJECTS[detectedType];
+    if (skipPatterns) {
+      const lowerSubject = subject.toLowerCase();
+      if (skipPatterns.some(p => lowerSubject.includes(p))) {
+        log(`${tag} Skipping fake email for ${detectedName}: "${subject}"`);
+        sessionUIDCache.add(uid);
+        await recordProcessedEmail(uidStr, '', 'skipped_fake', clientId);
+        return;
+      }
     }
 
     // ── Build fullText for AI path ────────────────────────────────────────
