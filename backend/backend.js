@@ -1,67 +1,82 @@
-// ═══════════════════════════════════════════════════════════════════════════ 
+// ═══════════════════════════════════════════════════════════════════════════
 // MIGME BACKEND — backend.js
 // ═══════════════════════════════════════════════════════════════════════════
-require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
+require("dotenv").config({
+  path: require("path").join(__dirname, "..", ".env"),
+});
 
-const express          = require('express');
-const cors             = require('cors');
-const fs               = require('fs');
-const path             = require('path');
-const crypto           = require('crypto');
-const imaps            = require('imap-simple');
-const { simpleParser } = require('mailparser');
+const express = require("express");
+const cors = require("cors");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const imaps = require("imap-simple");
+const { simpleParser } = require("mailparser");
 // DOM parsing for text/html vendors — used by parseDomOrder()
-const cheerio          = require('cheerio');
+const cheerio = require("cheerio");
 // ✅ FIX 1: decode import kept for any future use but NOT called on parsed.html
 // mailparser's simpleParser already decodes quoted-printable — calling decodeQP
 // again on parsed.html corrupts = signs, ₹ symbol, CSS values and HTML attributes.
 // parseDomOrder now uses htmlBody directly without re-decoding.
-const { decode: decodeQP } = require('quoted-printable');
+const { decode: decodeQP } = require("quoted-printable");
 
 // ── Firebase client SDK ────────────────────────────────────────────────────
-const { initializeApp }  = require('firebase/app');
+const { initializeApp } = require("firebase/app");
 const {
-  getFirestore, collection, doc,
-  getDoc, getDocs, setDoc, updateDoc, deleteDoc,
+  getFirestore,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  deleteDoc,
   addDoc,
-  query, where, onSnapshot,
-} = require('firebase/firestore');
+  query,
+  where,
+  onSnapshot,
+} = require("firebase/firestore");
 
-const { getAuth, signInWithCustomToken } = require('firebase/auth');
+const { getAuth, signInWithCustomToken } = require("firebase/auth");
 
-const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
+const {
+  BedrockRuntimeClient,
+  ConverseCommand,
+} = require("@aws-sdk/client-bedrock-runtime");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MANDATORY ENV-VAR STARTUP CHECK
 // ═══════════════════════════════════════════════════════════════════════════
 const REQUIRED_ENV = [
-  'ENCRYPTION_KEY',
-  'ADMIN_API_KEY',
-  'EXPO_PUBLIC_FIREBASE_API_KEY',
-  'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
-  'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
-  'EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',
-  'EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
-  'EXPO_PUBLIC_FIREBASE_APP_ID',
+  "ENCRYPTION_KEY",
+  "ADMIN_API_KEY",
+  "EXPO_PUBLIC_FIREBASE_API_KEY",
+  "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN",
+  "EXPO_PUBLIC_FIREBASE_PROJECT_ID",
+  "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET",
+  "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID",
+  "EXPO_PUBLIC_FIREBASE_APP_ID",
 ];
-const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
+const missingEnv = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missingEnv.length > 0) {
-  process.stderr.write(`[FATAL] Missing required env vars: ${missingEnv.join(', ')}\nExiting.\n`);
+  process.stderr.write(
+    `[FATAL] Missing required env vars: ${missingEnv.join(", ")}\nExiting.\n`,
+  );
   process.exit(1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CRASH RECOVERY & LOGGING
 // ═══════════════════════════════════════════════════════════════════════════
-const LOG_FILE      = path.join(__dirname, 'server.log');
+const LOG_FILE = path.join(__dirname, "server.log");
 const LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 function maskPII(msg) {
-  if (typeof msg !== 'string') msg = String(msg);
-  msg = msg.replace(/\b(\d{3})\d{3}(\d{4})\b/g, '$1***$2');
+  if (typeof msg !== "string") msg = String(msg);
+  msg = msg.replace(/\b(\d{3})\d{3}(\d{4})\b/g, "$1***$2");
   msg = msg.replace(
     /\b([A-Za-z0-9._%+\-]{1,3})[A-Za-z0-9._%+\-]+(@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b/g,
-    '$1***$2'
+    "$1***$2",
   );
   return msg;
 }
@@ -72,33 +87,39 @@ function rotateLogIfNeeded() {
     if (stat.size < LOG_MAX_BYTES) return;
     const rotated = `${LOG_FILE}.${Date.now()}.bak`;
     fs.renameSync(LOG_FILE, rotated);
-    const dir   = path.dirname(LOG_FILE);
-    const base  = path.basename(LOG_FILE);
-    const backs = fs.readdirSync(dir)
-      .filter(f => f.startsWith(base + '.') && f.endsWith('.bak'))
-      .map(f => ({ f, t: parseInt(f.split('.').slice(-2, -1)[0], 10) || 0 }))
+    const dir = path.dirname(LOG_FILE);
+    const base = path.basename(LOG_FILE);
+    const backs = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith(base + ".") && f.endsWith(".bak"))
+      .map((f) => ({ f, t: parseInt(f.split(".").slice(-2, -1)[0], 10) || 0 }))
       .sort((a, b) => b.t - a.t);
     backs.slice(2).forEach(({ f }) => {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
+      try {
+        fs.unlinkSync(path.join(dir, f));
+      } catch (_) {}
     });
   } catch (_) {}
 }
 
 function writeLog(level, msg) {
   const masked = maskPII(msg);
-  const line   = `[${new Date().toISOString()}] [${level}] ${masked}\n`;
+  const line = `[${new Date().toISOString()}] [${level}] ${masked}\n`;
   process.stdout.write(line);
-  try { rotateLogIfNeeded(); fs.appendFileSync(LOG_FILE, line); } catch (_) {}
+  try {
+    rotateLogIfNeeded();
+    fs.appendFileSync(LOG_FILE, line);
+  } catch (_) {}
 }
-const log  = (msg) => writeLog('INFO',  msg);
-const warn = (msg) => writeLog('WARN',  msg);
-const err  = (msg) => writeLog('ERROR', msg);
+const log = (msg) => writeLog("INFO", msg);
+const warn = (msg) => writeLog("WARN", msg);
+const err = (msg) => writeLog("ERROR", msg);
 
-process.on('uncaughtException', (e) => {
+process.on("uncaughtException", (e) => {
   err(`uncaughtException: ${e.stack || e.message}`);
   setTimeout(() => process.exit(1), 500);
 });
-process.on('unhandledRejection', (reason) => {
+process.on("unhandledRejection", (reason) => {
   err(`unhandledRejection: ${reason?.stack || reason}`);
 });
 
@@ -108,98 +129,116 @@ process.on('unhandledRejection', (reason) => {
 const globalStopFns = new Set();
 
 function shutdown(signal) {
-  log(`${signal} received — stopping ${globalStopFns.size} active poller(s)...`);
-  for (const fn of globalStopFns) { try { fn(); } catch (_) {} }
-  setTimeout(() => { log('Graceful exit complete.'); process.exit(0); }, 3000);
+  log(
+    `${signal} received — stopping ${globalStopFns.size} active poller(s)...`,
+  );
+  for (const fn of globalStopFns) {
+    try {
+      fn();
+    } catch (_) {}
+  }
+  setTimeout(() => {
+    log("Graceful exit complete.");
+    process.exit(0);
+  }, 3000);
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FIREBASE CLIENT SDK
 // ═══════════════════════════════════════════════════════════════════════════
 const firebaseConfig = {
-  apiKey:            process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain:        process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId:         process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket:     process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId:             process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
-const firebaseApp = initializeApp(firebaseConfig, 'migme-backend');
+const firebaseApp = initializeApp(firebaseConfig, "migme-backend");
 const db = getFirestore(firebaseApp);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FIREBASE ADMIN SDK
 // ═══════════════════════════════════════════════════════════════════════════
-const admin   = require('firebase-admin');
-const SA_PATH = process.env.FIREBASE_SA_PATH || path.join(__dirname, 'serviceAccountKey.json');
+const admin = require("firebase-admin");
+const SA_PATH =
+  process.env.FIREBASE_SA_PATH ||
+  path.join(__dirname, "serviceAccountKey.json");
 
 if (admin.apps.length === 0) {
   if (process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
     admin.initializeApp({
       credential: admin.credential.cert({
-        projectId:   process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+        projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey:  process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
       }),
     });
   } else if (fs.existsSync(SA_PATH)) {
     admin.initializeApp({ credential: admin.credential.cert(SA_PATH) });
   } else {
-    admin.initializeApp({ projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID });
-    warn('Firebase Admin: no service account credentials found — Auth operations may fail');
+    admin.initializeApp({
+      projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+    });
+    warn(
+      "Firebase Admin: no service account credentials found — Auth operations may fail",
+    );
   }
 }
 const authAdmin = admin.auth();
 
-const BACKEND_AUTH_UID = '__backend__';
+const BACKEND_AUTH_UID = "__backend__";
 const backendAuthReady = (async function authBackend() {
   try {
     await authAdmin.getUser(BACKEND_AUTH_UID);
   } catch {
     await authAdmin.createUser({
-      uid:      BACKEND_AUTH_UID,
-      email:    'backend@migme.internal',
-      password: crypto.randomBytes(24).toString('hex'),
+      uid: BACKEND_AUTH_UID,
+      email: "backend@migme.internal",
+      password: crypto.randomBytes(24).toString("hex"),
     });
   }
   const token = await authAdmin.createCustomToken(BACKEND_AUTH_UID, {
-  email: 'backend@migme.internal',
-   });
+    email: "backend@migme.internal",
+  });
   const authInstance = getAuth(firebaseApp);
   await signInWithCustomToken(authInstance, token);
-  log('Backend Firestore client authenticated');
-})().catch(e => { warn(`Backend auth failed: ${e.message}`); throw e; });
+  log("Backend Firestore client authenticated");
+})().catch((e) => {
+  warn(`Backend auth failed: ${e.message}`);
+  throw e;
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENCRYPTION  (AES-256-GCM)
 // ═══════════════════════════════════════════════════════════════════════════
 function getEncryptionKey() {
   const raw = process.env.ENCRYPTION_KEY;
-  if (!raw) throw new Error('ENCRYPTION_KEY env var is required');
-  return crypto.createHash('sha256').update(raw).digest();
+  if (!raw) throw new Error("ENCRYPTION_KEY env var is required");
+  return crypto.createHash("sha256").update(raw).digest();
 }
 
 function encrypt(plaintext) {
-  const key    = getEncryptionKey();
-  const iv     = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const enc    = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const tag    = cipher.getAuthTag();
-  return `${iv.toString('base64')}:${tag.toString('base64')}:${enc.toString('base64')}`;
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString("base64")}:${tag.toString("base64")}:${enc.toString("base64")}`;
 }
 
 function decrypt(ciphertext) {
-  const key    = getEncryptionKey();
-  const parts  = ciphertext.split(':');
-  if (parts.length !== 3) throw new Error('Invalid encrypted format');
-  const iv       = Buffer.from(parts[0], 'base64');
-  const tag      = Buffer.from(parts[1], 'base64');
-  const enc      = Buffer.from(parts[2], 'base64');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  const key = getEncryptionKey();
+  const parts = ciphertext.split(":");
+  if (parts.length !== 3) throw new Error("Invalid encrypted format");
+  const iv = Buffer.from(parts[0], "base64");
+  const tag = Buffer.from(parts[1], "base64");
+  const enc = Buffer.from(parts[2], "base64");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
-  return decipher.update(enc, 'utf8') + decipher.final('utf8');
+  return decipher.update(enc, "utf8") + decipher.final("utf8");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -207,26 +246,28 @@ function decrypt(ciphertext) {
 // ═══════════════════════════════════════════════════════════════════════════
 function hashPassword(password) {
   return new Promise((resolve, reject) => {
-    const salt = crypto.randomBytes(16).toString('hex');
+    const salt = crypto.randomBytes(16).toString("hex");
     crypto.scrypt(password, salt, 64, (e, key) => {
       if (e) reject(e);
-      else   resolve(`${salt}:${key.toString('hex')}`);
+      else resolve(`${salt}:${key.toString("hex")}`);
     });
   });
 }
 
 function verifyPassword(password, stored) {
-  if (!stored || !stored.includes(':')) {
+  if (!stored || !stored.includes(":")) {
     return Promise.resolve(password === stored);
   }
   return new Promise((resolve, reject) => {
-    const [salt, hash] = stored.split(':');
+    const [salt, hash] = stored.split(":");
     crypto.scrypt(password, salt, 64, (e, key) => {
       if (e) reject(e);
       else {
         try {
-          resolve(crypto.timingSafeEqual(Buffer.from(hash, 'hex'), key));
-        } catch (_) { resolve(false); }
+          resolve(crypto.timingSafeEqual(Buffer.from(hash, "hex"), key));
+        } catch (_) {
+          resolve(false);
+        }
       }
     });
   });
@@ -236,14 +277,20 @@ function verifyPassword(password, stored) {
 // ADMIN KEY HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 function maskKey(key) {
-  if (!key || key.length < 8) return '***';
-  return key.slice(0, 4) + '*'.repeat(key.length - 8) + key.slice(-4);
+  if (!key || key.length < 8) return "***";
+  return key.slice(0, 4) + "*".repeat(key.length - 8) + key.slice(-4);
 }
 
 function safeCompareKey(provided, secret) {
   if (!provided || !secret) return false;
-  const hmacA = crypto.createHmac('sha256', 'migme-key-cmp').update(provided).digest();
-  const hmacB = crypto.createHmac('sha256', 'migme-key-cmp').update(secret).digest();
+  const hmacA = crypto
+    .createHmac("sha256", "migme-key-cmp")
+    .update(provided)
+    .digest();
+  const hmacB = crypto
+    .createHmac("sha256", "migme-key-cmp")
+    .update(secret)
+    .digest();
   return crypto.timingSafeEqual(hmacA, hmacB);
 }
 
@@ -254,19 +301,26 @@ const _rateBuckets = new Map();
 
 function rateLimit(maxPerMinute = 20) {
   return (req, res, next) => {
-    const ip  = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
-      .split(',')[0].trim();
+    const ip = (
+      req.headers["x-forwarded-for"] ||
+      req.socket.remoteAddress ||
+      "unknown"
+    )
+      .split(",")[0]
+      .trim();
     const key = `${ip}:${Math.floor(Date.now() / 60000)}`;
     const cnt = (_rateBuckets.get(key) || 0) + 1;
     _rateBuckets.set(key, cnt);
     if (_rateBuckets.size > 2000) {
       const cutoff = Math.floor(Date.now() / 60000) - 2;
       for (const k of _rateBuckets.keys()) {
-        if (parseInt(k.split(':').pop(), 10) < cutoff) _rateBuckets.delete(k);
+        if (parseInt(k.split(":").pop(), 10) < cutoff) _rateBuckets.delete(k);
       }
     }
     if (cnt > maxPerMinute) {
-      return res.status(429).json({ error: 'Too many requests — please slow down.' });
+      return res
+        .status(429)
+        .json({ error: "Too many requests — please slow down." });
     }
     next();
   };
@@ -282,24 +336,26 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
-const orderDocId   = (clientId, orderNo) => `${clientId}_${orderNo}`;
-const emailDocId   = (clientId, uid)     => `${clientId}_${uid}`;
-const emailIndexId = (clientId, date)    => `${clientId}_${date}`;
+const orderDocId = (clientId, orderNo) => `${clientId}_${orderNo}`;
+const emailDocId = (clientId, uid) => `${clientId}_${uid}`;
+const emailIndexId = (clientId, date) => `${clientId}_${date}`;
 
 function getOrderMap(dateStr, clientId) {
   if (!dailyOrderCache[dateStr]) dailyOrderCache[dateStr] = {};
-  if (!dailyOrderCache[dateStr][clientId]) dailyOrderCache[dateStr][clientId] = new Map();
+  if (!dailyOrderCache[dateStr][clientId])
+    dailyOrderCache[dateStr][clientId] = new Map();
   return dailyOrderCache[dateStr][clientId];
 }
 
 function getEmailSet(dateStr, clientId) {
   if (!dailyEmailCache[dateStr]) dailyEmailCache[dateStr] = {};
-  if (!dailyEmailCache[dateStr][clientId]) dailyEmailCache[dateStr][clientId] = new Set();
+  if (!dailyEmailCache[dateStr][clientId])
+    dailyEmailCache[dateStr][clientId] = new Set();
   return dailyEmailCache[dateStr][clientId];
 }
 
 function scheduleMidnightReset() {
-  const now  = new Date();
+  const now = new Date();
   const next = new Date(now);
   next.setDate(next.getDate() + 1);
   next.setHours(0, 1, 0, 0);
@@ -318,17 +374,17 @@ function scheduleMidnightReset() {
 scheduleMidnightReset();
 
 async function warmOrderCache(clientId) {
-  const date     = todayStr();
+  const date = todayStr();
   const orderMap = getOrderMap(date, clientId);
   if (orderMap.size > 0) return;
   try {
-    const q    = query(
-      collection(db, 'orders'),
-      where('deliveryDate', '==', date),
-      where('clientId', '==', clientId)
+    const q = query(
+      collection(db, "orders"),
+      where("deliveryDate", "==", date),
+      where("clientId", "==", clientId),
     );
     const snap = await getDocs(q);
-    snap.forEach(d => orderMap.set(d.id, d.data()));
+    snap.forEach((d) => orderMap.set(d.id, d.data()));
     log(`📦 Cache warmed for ${clientId}/${date}: ${orderMap.size} orders`);
   } catch (e) {
     warn(`Cache warm failed for ${clientId}: ${e.message}`);
@@ -336,16 +392,18 @@ async function warmOrderCache(clientId) {
 }
 
 async function warmEmailCache(clientId) {
-  const date     = todayStr();
+  const date = todayStr();
   const emailSet = getEmailSet(date, clientId);
   if (emailSet.size > 0) return;
   try {
     const indexSnap = await getDoc(
-      doc(db, 'processed_emails_index', emailIndexId(clientId, date))
+      doc(db, "processed_emails_index", emailIndexId(clientId, date)),
     );
     if (indexSnap.exists()) {
-      (indexSnap.data().uids || []).forEach(u => emailSet.add(u));
-      log(`📬 Email cache warmed for ${clientId}/${date}: ${emailSet.size} UIDs`);
+      (indexSnap.data().uids || []).forEach((u) => emailSet.add(u));
+      log(
+        `📬 Email cache warmed for ${clientId}/${date}: ${emailSet.size} UIDs`,
+      );
     }
   } catch (e) {
     warn(`Email cache warm failed for ${clientId}: ${e.message}`);
@@ -365,22 +423,28 @@ async function warmEmailCache(clientId) {
 // stay OUT of the in-memory set so Guard 3 gets a chance to retry them.
 // ═══════════════════════════════════════════════════════════════════════════
 async function recordProcessedEmail(uidStr, orderNo, status, clientId) {
-  const date     = todayStr();
+  const date = todayStr();
   const emailSet = getEmailSet(date, clientId);
 
   // ✅ FIX 5: only cache in memory if status is truly final
-  if (status !== 'incomplete_data') {
+  if (status !== "incomplete_data") {
     emailSet.add(uidStr);
   }
 
   try {
-    await setDoc(doc(db, 'processed_emails', emailDocId(clientId, uidStr)), {
-      status, orderNo: orderNo || '', clientId,
+    await setDoc(doc(db, "processed_emails", emailDocId(clientId, uidStr)), {
+      status,
+      orderNo: orderNo || "",
+      clientId,
       processedAt: new Date().toISOString(),
     });
-    const indexRef  = doc(db, 'processed_emails_index', emailIndexId(clientId, date));
+    const indexRef = doc(
+      db,
+      "processed_emails_index",
+      emailIndexId(clientId, date),
+    );
     const indexSnap = await getDoc(indexRef);
-    const existing  = indexSnap.exists() ? (indexSnap.data().uids || []) : [];
+    const existing = indexSnap.exists() ? indexSnap.data().uids || [] : [];
     if (!existing.includes(uidStr)) {
       await setDoc(indexRef, { uids: [...existing, uidStr] }, { merge: true });
     }
@@ -406,78 +470,103 @@ function releaseLock(lockKey) {
 // ═══════════════════════════════════════════════════════════════════════════
 // WEB SERVER
 // ═══════════════════════════════════════════════════════════════════════════
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
 const ALLOWED_ORIGINS = (
   process.env.CORS_ORIGINS ||
-  'http://localhost:8081,http://localhost:19006,https://migme.onrender.com'
-).split(',').map(o => o.trim());
+  "http://localhost:8081,http://localhost:19006,https://migme.onrender.com"
+)
+  .split(",")
+  .map((o) => o.trim());
 
-app.use(cors({
-  origin:         ALLOWED_ORIGINS,
-  credentials:    true,
-  methods:        ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'],
-}));
+app.use(
+  cors({
+    origin: ALLOWED_ORIGINS,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-key"],
+  }),
+);
 
-app.get('/', (_req, res) => {
+app.get("/", (_req, res) => {
   const today = todayStr();
-  let orderCount = 0, emailCount = 0;
+  let orderCount = 0,
+    emailCount = 0;
   if (dailyOrderCache[today]) {
-    for (const map of Object.values(dailyOrderCache[today])) orderCount += map.size;
+    for (const map of Object.values(dailyOrderCache[today]))
+      orderCount += map.size;
   }
   if (dailyEmailCache[today]) {
-    for (const set of Object.values(dailyEmailCache[today])) emailCount += set.size;
+    for (const set of Object.values(dailyEmailCache[today]))
+      emailCount += set.size;
   }
   res.send(
     `MIGME Backend ✅ | Date: ${today}` +
-    ` | Orders in cache: ${orderCount}` +
-    ` | Emails processed today: ${emailCount}` +
-    ` | Active pollers: ${globalStopFns.size}`
+      ` | Orders in cache: ${orderCount}` +
+      ` | Emails processed today: ${emailCount}` +
+      ` | Active pollers: ${globalStopFns.size}`,
   );
 });
 
-app.get('/logs', rateLimit(30), (req, res) => {
+app.get("/logs", rateLimit(30), (req, res) => {
   const token = process.env.LOG_TOKEN;
-  if (token && req.query.token !== token) return res.status(403).send('Forbidden');
+  if (token && req.query.token !== token)
+    return res.status(403).send("Forbidden");
   try {
-    const lines = fs.readFileSync(LOG_FILE, 'utf8').split('\n').slice(-200).join('\n');
-    res.type('text/plain').send(lines);
-  } catch (_) { res.send('No log file yet.'); }
+    const lines = fs
+      .readFileSync(LOG_FILE, "utf8")
+      .split("\n")
+      .slice(-200)
+      .join("\n");
+    res.type("text/plain").send(lines);
+  } catch (_) {
+    res.send("No log file yet.");
+  }
 });
 
 function requireAdmin(req, res, next) {
-  if (!safeCompareKey(req.headers['x-admin-key'], process.env.ADMIN_API_KEY)) {
-    warn(`Admin route ${req.method} ${req.path}: rejected key ${maskKey(req.headers['x-admin-key'] || '')}`);
-    return res.status(403).json({ error: 'Forbidden' });
+  if (!safeCompareKey(req.headers["x-admin-key"], process.env.ADMIN_API_KEY)) {
+    warn(
+      `Admin route ${req.method} ${req.path}: rejected key ${maskKey(req.headers["x-admin-key"] || "")}`,
+    );
+    return res.status(403).json({ error: "Forbidden" });
   }
   next();
 }
 
-app.post('/api/clients', rateLimit(5), requireAdmin, async (req, res) => {
+app.post("/api/clients", rateLimit(5), requireAdmin, async (req, res) => {
   try {
     const { businessName, email, appPassword, password } = req.body;
     if (!businessName || !email || !appPassword || !password) {
-      return res.status(400).json({ error: 'Missing required fields: businessName, email, appPassword, password' });
+      return res.status(400).json({
+        error:
+          "Missing required fields: businessName, email, appPassword, password",
+      });
     }
     const encryptedAppPassword = encrypt(appPassword);
-    const passwordHash         = await hashPassword(password);
-    const clientEmail          = email.trim().toLowerCase();
-    const docRef = await addDoc(collection(db, 'clients'), {
+    const passwordHash = await hashPassword(password);
+    const clientEmail = email.trim().toLowerCase();
+    const docRef = await addDoc(collection(db, "clients"), {
       businessName: businessName.trim(),
-      email:        clientEmail,
-      appPassword:  encryptedAppPassword,
+      email: clientEmail,
+      appPassword: encryptedAppPassword,
       passwordHash,
-      active:       true,
-      createdAt:    new Date().toISOString(),
+      active: true,
+      createdAt: new Date().toISOString(),
     });
     try {
-      await authAdmin.createUser({ uid: docRef.id, email: clientEmail, password });
+      await authAdmin.createUser({
+        uid: docRef.id,
+        email: clientEmail,
+        password,
+      });
     } catch (authErr) {
-      warn(`POST /api/clients: Auth user creation non-fatal: ${authErr.message}`);
+      warn(
+        `POST /api/clients: Auth user creation non-fatal: ${authErr.message}`,
+      );
     }
     log(`Client created: ${businessName} (${docRef.id})`);
     res.json({ id: docRef.id, businessName });
@@ -487,110 +576,177 @@ app.post('/api/clients', rateLimit(5), requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/auth/create-user', rateLimit(5), requireAdmin, async (req, res) => {
-  try {
-    const { uid, email, password } = req.body;
-    if (!uid || !email || !password) {
-      return res.status(400).json({ error: 'Missing uid, email, or password' });
+app.post(
+  "/api/auth/create-user",
+  rateLimit(5),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { uid, email, password } = req.body;
+      if (!uid || !email || !password) {
+        return res
+          .status(400)
+          .json({ error: "Missing uid, email, or password" });
+      }
+      await authAdmin.createUser({ uid, email, password });
+      log(`Auth user created for ${email} (${uid})`);
+      res.json({ success: true });
+    } catch (e) {
+      warn(`POST /api/auth/create-user error: ${e.message}`);
+      res.status(500).json({ error: e.message });
     }
-    await authAdmin.createUser({ uid, email, password });
-    log(`Auth user created for ${email} (${uid})`);
-    res.json({ success: true });
-  } catch (e) {
-    warn(`POST /api/auth/create-user error: ${e.message}`);
-    res.status(500).json({ error: e.message });
-  }
-});
+  },
+);
 
-app.post('/api/auth/verify-password', rateLimit(10), requireAdmin, async (req, res) => {
-  try {
-    const { uid, password } = req.body;
-    if (!uid || !password) {
-      return res.status(400).json({ error: 'Missing uid or password' });
+app.post(
+  "/api/auth/verify-password",
+  rateLimit(10),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { uid, password } = req.body;
+      if (!uid || !password) {
+        return res.status(400).json({ error: "Missing uid or password" });
+      }
+      const snap = await getDoc(doc(db, "clients", uid));
+      if (!snap.exists()) return res.json({ valid: false });
+      const data = snap.data();
+      const stored = data.passwordHash || data.password;
+      const valid =
+        stored && stored.includes(":")
+          ? await verifyPassword(password, stored)
+          : password === stored;
+      res.json({ valid });
+    } catch (e) {
+      warn(`POST /api/auth/verify-password error: ${e.message}`);
+      res.status(500).json({ error: e.message });
     }
-    const snap = await getDoc(doc(db, 'clients', uid));
-    if (!snap.exists()) return res.json({ valid: false });
-    const data   = snap.data();
-    const stored = data.passwordHash || data.password;
-    const valid  = stored && stored.includes(':')
-      ? await verifyPassword(password, stored)
-      : password === stored;
-    res.json({ valid });
-  } catch (e) {
-    warn(`POST /api/auth/verify-password error: ${e.message}`);
-    res.status(500).json({ error: e.message });
-  }
-});
+  },
+);
 
-app.delete('/api/data/client/:clientId/range', requireAdmin, async (req, res) => {
-  try {
-    const { clientId } = req.params;
-    const { startDate, endDate } = req.body;
-    if (!startDate || !endDate) {
-      return res.status(400).json({ error: 'startDate and endDate required' });
+app.delete(
+  "/api/data/client/:clientId/range",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const { startDate, endDate } = req.body;
+      if (!startDate || !endDate) {
+        return res
+          .status(400)
+          .json({ error: "startDate and endDate required" });
+      }
+      const q = query(
+        collection(db, "orders"),
+        where("clientId", "==", clientId),
+        where("createdAt", ">=", new Date(startDate).toISOString()),
+        where("createdAt", "<=", new Date(endDate).toISOString()),
+      );
+      const snap = await getDocs(q);
+      let deleted = 0;
+      for (const d of snap.docs) {
+        await deleteDoc(doc(db, "orders", d.id));
+        deleted++;
+      }
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      let indexDeleted = 0;
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().slice(0, 10);
+        const indexRef = doc(
+          db,
+          "processed_emails_index",
+          `${clientId}_${dateStr}`,
+        );
+        const s = await getDoc(indexRef);
+        if (s.exists()) {
+          await deleteDoc(indexRef);
+          indexDeleted++;
+        }
+      }
+      log(
+        `Admin deleted ${deleted} orders + ${indexDeleted} index entries for client ${clientId} [${startDate} → ${endDate}]`,
+      );
+      res.json({ deletedOrders: deleted, deletedIndexEntries: indexDeleted });
+    } catch (e) {
+      warn(`DELETE /api/data/client/:clientId/range error: ${e.message}`);
+      res.status(500).json({ error: e.message });
     }
-    const q    = query(
-      collection(db, 'orders'),
-      where('clientId', '==', clientId),
-      where('createdAt', '>=', new Date(startDate).toISOString()),
-      where('createdAt', '<=', new Date(endDate).toISOString())
-    );
-    const snap = await getDocs(q);
-    let deleted = 0;
-    for (const d of snap.docs) { await deleteDoc(doc(db, 'orders', d.id)); deleted++; }
-    const start = new Date(startDate);
-    const end   = new Date(endDate);
-    let indexDeleted = 0;
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr  = d.toISOString().slice(0, 10);
-      const indexRef = doc(db, 'processed_emails_index', `${clientId}_${dateStr}`);
-      const s        = await getDoc(indexRef);
-      if (s.exists()) { await deleteDoc(indexRef); indexDeleted++; }
+  },
+);
+
+app.delete(
+  "/api/data/client/:clientId/order/:orderNo",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { clientId, orderNo } = req.params;
+      const docId = `${clientId}_${orderNo}`;
+      const ref = doc(db, "orders", docId);
+      const snap = await getDoc(ref);
+      if (!snap.exists())
+        return res.status(404).json({ error: "Order not found" });
+      await deleteDoc(ref);
+      log(`Admin deleted order ${docId}`);
+      res.json({ deleted: docId });
+    } catch (e) {
+      warn(
+        `DELETE /api/data/client/:clientId/order/:orderNo error: ${e.message}`,
+      );
+      res.status(500).json({ error: e.message });
     }
-    log(`Admin deleted ${deleted} orders + ${indexDeleted} index entries for client ${clientId} [${startDate} → ${endDate}]`);
-    res.json({ deletedOrders: deleted, deletedIndexEntries: indexDeleted });
-  } catch (e) {
-    warn(`DELETE /api/data/client/:clientId/range error: ${e.message}`);
-    res.status(500).json({ error: e.message });
-  }
-});
+  },
+);
 
-app.delete('/api/data/client/:clientId/order/:orderNo', requireAdmin, async (req, res) => {
-  try {
-    const { clientId, orderNo } = req.params;
-    const docId = `${clientId}_${orderNo}`;
-    const ref   = doc(db, 'orders', docId);
-    const snap  = await getDoc(ref);
-    if (!snap.exists()) return res.status(404).json({ error: 'Order not found' });
-    await deleteDoc(ref);
-    log(`Admin deleted order ${docId}`);
-    res.json({ deleted: docId });
-  } catch (e) {
-    warn(`DELETE /api/data/client/:clientId/order/:orderNo error: ${e.message}`);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.delete('/api/data/client/:clientId/all', requireAdmin, async (req, res) => {
+app.delete("/api/data/client/:clientId/all", requireAdmin, async (req, res) => {
   try {
     const { clientId } = req.params;
     let total = 0;
-    const ordersSnap = await getDocs(query(collection(db, 'orders'), where('clientId', '==', clientId)));
-    for (const d of ordersSnap.docs) { await deleteDoc(doc(db, 'orders', d.id)); total++; }
-    const emailsSnap = await getDocs(query(collection(db, 'processed_emails'), where('clientId', '==', clientId)));
-    for (const d of emailsSnap.docs) { await deleteDoc(doc(db, 'processed_emails', d.id)); total++; }
-    const indexSnap = await getDocs(collection(db, 'processed_emails_index'));
+    const ordersSnap = await getDocs(
+      query(collection(db, "orders"), where("clientId", "==", clientId)),
+    );
+    for (const d of ordersSnap.docs) {
+      await deleteDoc(doc(db, "orders", d.id));
+      total++;
+    }
+    const emailsSnap = await getDocs(
+      query(
+        collection(db, "processed_emails"),
+        where("clientId", "==", clientId),
+      ),
+    );
+    for (const d of emailsSnap.docs) {
+      await deleteDoc(doc(db, "processed_emails", d.id));
+      total++;
+    }
+    const indexSnap = await getDocs(collection(db, "processed_emails_index"));
     for (const d of indexSnap.docs) {
       if (d.id.startsWith(`${clientId}_`)) {
-        await deleteDoc(doc(db, 'processed_emails_index', d.id)); total++;
+        await deleteDoc(doc(db, "processed_emails_index", d.id));
+        total++;
       }
     }
-    const menuSnap = await getDocs(query(collection(db, 'menuItems'), where('clientId', '==', clientId)));
-    for (const d of menuSnap.docs) { await deleteDoc(doc(db, 'menuItems', d.id)); total++; }
-    const catSnap = await getDocs(query(collection(db, 'categories'), where('clientId', '==', clientId)));
-    for (const d of catSnap.docs) { await deleteDoc(doc(db, 'categories', d.id)); total++; }
-    const execSnap = await getDocs(query(collection(db, 'executives'), where('clientId', '==', clientId)));
-    for (const d of execSnap.docs) { await deleteDoc(doc(db, 'executives', d.id)); total++; }
+    const menuSnap = await getDocs(
+      query(collection(db, "menuItems"), where("clientId", "==", clientId)),
+    );
+    for (const d of menuSnap.docs) {
+      await deleteDoc(doc(db, "menuItems", d.id));
+      total++;
+    }
+    const catSnap = await getDocs(
+      query(collection(db, "categories"), where("clientId", "==", clientId)),
+    );
+    for (const d of catSnap.docs) {
+      await deleteDoc(doc(db, "categories", d.id));
+      total++;
+    }
+    const execSnap = await getDocs(
+      query(collection(db, "executives"), where("clientId", "==", clientId)),
+    );
+    for (const d of execSnap.docs) {
+      await deleteDoc(doc(db, "executives", d.id));
+      total++;
+    }
     log(`Admin deleted ALL data (${total} docs) for client ${clientId}`);
     res.json({ deletedDocs: total });
   } catch (e) {
@@ -604,16 +760,21 @@ app.listen(PORT, () => log(`MIGME Backend running on port ${PORT}`));
 // ═══════════════════════════════════════════════════════════════════════════
 // PDF PARSE
 // ═══════════════════════════════════════════════════════════════════════════
-let pdfParseLib = require('pdf-parse');
-let pdfParse    = pdfParseLib.default || pdfParseLib;
-if (typeof pdfParse !== 'function') pdfParse = async () => ({ text: '' });
+let pdfParseLib = require("pdf-parse");
+let pdfParse = pdfParseLib.default || pdfParseLib;
+if (typeof pdfParse !== "function") pdfParse = async () => ({ text: "" });
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // VENDOR REGISTRY
 // ═══════════════════════════════════════════════════════════════════════════
-const { VENDOR_MAP, VENDOR_RULES, VENDOR_DOM_CONFIGS, VENDOR_SKIP_SUBJECTS } = require('./vendor-rules');
+const {
+  VENDOR_MAP,
+  VENDOR_RULES,
+  VENDOR_DOM_CONFIGS,
+  VENDOR_SKIP_SUBJECTS,
+} = require("./vendor-rules");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -623,38 +784,47 @@ async function markEmailAsRead(_connection, _uid) {}
 
 function getMissingFields(orderData) {
   const missing = [];
-  const name = (orderData.customerName || '').trim();
-  if (!name || name === 'N/A' || name === 'Unknown') missing.push('customerName');
-  if (!orderData.items || !Array.isArray(orderData.items) || orderData.items.length === 0) missing.push('items');
-  if (!(orderData.trainInfo || '').trim() || orderData.trainInfo === 'N/A') missing.push('trainInfo');
-  const date = (orderData.deliveryDate || '').trim();
-  if (!date || date === 'N/A' || date === 'YYYY-MM-DD') missing.push('deliveryDate');
-  return missing.length > 0 ? missing.join(', ') : null;
+  const name = (orderData.customerName || "").trim();
+  if (!name || name === "N/A" || name === "Unknown")
+    missing.push("customerName");
+  if (
+    !orderData.items ||
+    !Array.isArray(orderData.items) ||
+    orderData.items.length === 0
+  )
+    missing.push("items");
+  if (!(orderData.trainInfo || "").trim() || orderData.trainInfo === "N/A")
+    missing.push("trainInfo");
+  const date = (orderData.deliveryDate || "").trim();
+  if (!date || date === "N/A" || date === "YYYY-MM-DD")
+    missing.push("deliveryDate");
+  return missing.length > 0 ? missing.join(", ") : null;
 }
 
-const cleanFloat = (val) => parseFloat((val || 0).toString().replace(/[^\d.]/g, '')) || 0;
+const cleanFloat = (val) =>
+  parseFloat((val || 0).toString().replace(/[^\d.]/g, "")) || 0;
 
 // ── HTML to plain text — used for AI path (text/plain vendors) ──────────────
 function htmlToText(html) {
   return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi,  '\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<\/tr>/gi,  '\n')
-    .replace(/<\/th>/gi,  ' | ')
-    .replace(/<\/td>/gi,  ' | ')
-    .replace(/<[^>]+>/g,  ' ')
-    .replace(/&nbsp;/g,   ' ')
-    .replace(/&amp;/g,    '&')
-    .replace(/&lt;/g,     '<')
-    .replace(/&gt;/g,     '>')
-    .replace(/&quot;/g,   '"')
-    .replace(/&#39;/g,    "'")
-    .replace(/\r\n/g,   '\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g,  '\n\n')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/tr>/gi, "\n")
+    .replace(/<\/th>/gi, " | ")
+    .replace(/<\/td>/gi, " | ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -694,8 +864,8 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
     // ── 1a. Extract header <th> cells (Rajbhog/HomeBytes style) ────────────
     const _thCells = [];
-    $('thead th').each((_, el) => {
-      _thCells.push($(el).text().replace(/\s+/g, ' ').trim());
+    $("thead th").each((_, el) => {
+      _thCells.push($(el).text().replace(/\s+/g, " ").trim());
     });
 
     // ── 1b. Extract flat key/value fields ────────────────────────────────
@@ -710,11 +880,11 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         if (cfg.fallback) labelsToTry.push(cfg.fallback);
 
         for (const labelText of labelsToTry) {
-          $('td, th').each((_, el) => {
+          $("td, th").each((_, el) => {
             // Skip wrapper cells that contain child td/th (e.g. RailRecipe's
             // nested outer td wrappers around inner label-value cells)
-            if ($(el).find('td, th').length > 0) return;
-            const cellText = $(el).text().replace(/\s+/g, ' ').trim();
+            if ($(el).find("td, th").length > 0) return;
+            const cellText = $(el).text().replace(/\s+/g, " ").trim();
             if (cellText.includes(labelText)) {
               if (cfg.selfContained) {
                 // Try all matches — last match (deepest in DOM) wins.
@@ -737,9 +907,9 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
                   }
                 }
               } else {
-                const sibling = $(el).next('td, th');
+                const sibling = $(el).next("td, th");
                 if (sibling.length) {
-                  rawValue = sibling.text().replace(/\s+/g, ' ').trim();
+                  rawValue = sibling.text().replace(/\s+/g, " ").trim();
                   return false;
                 }
               }
@@ -750,7 +920,11 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       }
 
       // Strip vendor-defined value prefix if present (e.g. Zoop ": " prefix)
-      if (rawValue !== null && cfg.valuePrefix && rawValue.startsWith(cfg.valuePrefix)) {
+      if (
+        rawValue !== null &&
+        cfg.valuePrefix &&
+        rawValue.startsWith(cfg.valuePrefix)
+      ) {
         rawValue = rawValue.slice(cfg.valuePrefix.length);
       }
 
@@ -764,12 +938,12 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
     // ── 2. Extract items table ─────────────────────────────────────────────
     const { columnMap, itemCellSplit, footerLabels } = domConfig.itemsTable;
-    const colIndex  = {};
+    const colIndex = {};
     let headerFound = false;
-    const items     = [];
+    const items = [];
 
-    $('table tr').each((_, tr) => {
-      const cells = $(tr).find('td, th');
+    $("table tr").each((_, tr) => {
+      const cells = $(tr).find("td, th");
       if (!cells.length) return;
 
       // ── Detect header row ────────────────────────────────────────────────
@@ -793,22 +967,32 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       }
 
       // ── Footer detection: RailFood pattern (first empty + second=label) OR Zoop pattern (first=label) ──
-      const firstText  = cells.eq(0).text().trim();
+      const firstText = cells.eq(0).text().trim();
       const secondText = cells.eq(1).text().trim();
-      const isFooter = (!firstText && footerLabels.some(l =>
-          secondText.toLowerCase().includes(l.toLowerCase()))) ||
-          (footerLabels.some(l => firstText.toLowerCase().includes(l.toLowerCase())));
+      const isFooter =
+        (!firstText &&
+          footerLabels.some((l) =>
+            secondText.toLowerCase().includes(l.toLowerCase()),
+          )) ||
+        footerLabels.some((l) =>
+          firstText.toLowerCase().includes(l.toLowerCase()),
+        );
       if (isFooter) {
         // Capture footer total if configured and this row matches the capture label
         if (domConfig.itemsTable.captureFooterTotal) {
-          const captureLabel = domConfig.itemsTable.captureFooterTotal.toLowerCase();
+          const captureLabel =
+            domConfig.itemsTable.captureFooterTotal.toLowerCase();
           // Use startsWith (normalized) so "Total" doesn't match "Subtotal"
           // but still matches "Grand Total (Inclusive of all taxes)" (Yatri Restro)
-          const normalizeFooter = s => s.toLowerCase().replace(/:+$/g, '').trim();
-          if (normalizeFooter(firstText).startsWith(captureLabel) ||
-              normalizeFooter(secondText).startsWith(captureLabel)) {
+          const normalizeFooter = (s) =>
+            s.toLowerCase().replace(/:+$/g, "").trim();
+          if (
+            normalizeFooter(firstText).startsWith(captureLabel) ||
+            normalizeFooter(secondText).startsWith(captureLabel)
+          ) {
             const lastCell = cells.last();
-            order._itemsTotal = parseFloat(lastCell.text().replace(/[^\d.]/g, '')) || 0;
+            order._itemsTotal =
+              parseFloat(lastCell.text().replace(/[^\d.]/g, "")) || 0;
             log(`${tag} Captured _itemsTotal: ${order._itemsTotal}`);
             return false; // break after capturing Total
           }
@@ -819,31 +1003,40 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
       // ── Skip rows where the item-name cell still contains a header label ──
       // (handles wrapper/summary rows that appear after the header in some emails)
-      const _rawItemText = cells.eq(colIndex['rawItem']).text().trim().toLowerCase();
-      if (Object.keys(columnMap).some(h => _rawItemText === h.toLowerCase())) return;
+      const _rawItemText = cells
+        .eq(colIndex["rawItem"])
+        .text()
+        .trim()
+        .toLowerCase();
+      if (Object.keys(columnMap).some((h) => _rawItemText === h.toLowerCase()))
+        return;
 
       // ── Parse item row ───────────────────────────────────────────────────
-      const rawItemCell = cells.eq(colIndex['rawItem']);
-      const priceText   = cells.eq(colIndex['price']).text().trim();
-      const qtyText     = cells.eq(colIndex['qty']).text().trim();
+      const rawItemCell = cells.eq(colIndex["rawItem"]);
+      const priceText = cells.eq(colIndex["price"]).text().trim();
+      const qtyText = cells.eq(colIndex["qty"]).text().trim();
 
-      let itemName = '', itemDesc = '';
-      if (itemCellSplit === 'br') {
-        const parts = (rawItemCell.html() || '')
+      let itemName = "",
+        itemDesc = "";
+      if (itemCellSplit === "br") {
+        const parts = (rawItemCell.html() || "")
           .split(/<br\s*\/?>/i)
-          .map(p => cheerio.load(p).text().trim())
+          .map((p) => cheerio.load(p).text().trim())
           .filter(Boolean);
-        itemName = parts[0] || '';
-        itemDesc = parts[1] || '';
+        itemName = parts[0] || "";
+        itemDesc = parts[1] || "";
       } else if (domConfig.itemsTable.itemNameFromP) {
         // ── Railreceipt: <p> = name, <small> = description ───────────────
-        itemName = rawItemCell.find('p').first().text().trim();
-        itemDesc = rawItemCell.find('small').text().trim();
+        itemName = rawItemCell.find("p").first().text().trim();
+        itemDesc = rawItemCell.find("small").text().trim();
       } else {
-        const parts = rawItemCell.text().split('\n')
-          .map(p => p.trim()).filter(Boolean);
-        itemName = parts[0] || '';
-        itemDesc = parts[1] || '';
+        const parts = rawItemCell
+          .text()
+          .split("\n")
+          .map((p) => p.trim())
+          .filter(Boolean);
+        itemName = parts[0] || "";
+        itemDesc = parts[1] || "";
       }
 
       if (!itemName || !qtyText || !priceText) return;
@@ -852,7 +1045,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       // Handles railreceipt "₹ 180" format — parseFloat("₹ 180") returns NaN.
       // For all other vendors stripCurrencyPrefix is undefined → no change.
       const cleanPriceText = domConfig.itemsTable.stripCurrencyPrefix
-        ? priceText.replace(domConfig.itemsTable.stripCurrencyPrefix, '').trim()
+        ? priceText.replace(domConfig.itemsTable.stripCurrencyPrefix, "").trim()
         : priceText;
       const price = parseFloat(cleanPriceText) || 0;
 
@@ -860,7 +1053,12 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       // Handles railreceipt "x6" format — parseInt("x6") returns NaN → was 1.
       // For all other vendors stripQtyPrefix is undefined → no change.
       const cleanQtyText = domConfig.itemsTable.stripQtyPrefix
-        ? qtyText.replace(new RegExp('^' + domConfig.itemsTable.stripQtyPrefix, 'i'), '').trim()
+        ? qtyText
+            .replace(
+              new RegExp("^" + domConfig.itemsTable.stripQtyPrefix, "i"),
+              "",
+            )
+            .trim()
         : qtyText;
       const quantity = parseInt(cleanQtyText, 10) || 1;
 
@@ -868,10 +1066,15 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
       // Capture amount column for cross-check if vendor defines it
       let itemAmount = null;
-      if (domConfig.itemsTable.enableQtyCrossCheck && colIndex['amountCol'] !== undefined) {
-        const amountText = cells.eq(colIndex['amountCol']).text().trim();
+      if (
+        domConfig.itemsTable.enableQtyCrossCheck &&
+        colIndex["amountCol"] !== undefined
+      ) {
+        const amountText = cells.eq(colIndex["amountCol"]).text().trim();
         const cleanAmountText = domConfig.itemsTable.stripCurrencyPrefix
-          ? amountText.replace(domConfig.itemsTable.stripCurrencyPrefix, '').trim()
+          ? amountText
+              .replace(domConfig.itemsTable.stripCurrencyPrefix, "")
+              .trim()
           : amountText;
         itemAmount = parseFloat(cleanAmountText) || null;
       }
@@ -883,23 +1086,28 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     });
 
     if (!headerFound || items.length === 0) {
-      warn(`${tag} DOM parser: items table not found or empty — falling back to AI`);
+      warn(
+        `${tag} DOM parser: items table not found or empty — falling back to AI`,
+      );
       return null;
     }
 
     order.items = items;
     order.subTotal = items.reduce((s, it) => s + it.price * it.quantity, 0);
 
-    const finalOrder = domConfig.postProcess ? domConfig.postProcess(order) : order;
+    const finalOrder = domConfig.postProcess
+      ? domConfig.postProcess(order)
+      : order;
 
-    finalOrder.vendorName     = vendorName;
-    finalOrder.tax            = finalOrder.tax            ?? 0;
+    finalOrder.vendorName = vendorName;
+    finalOrder.tax = finalOrder.tax ?? 0;
     finalOrder.deliveryCharge = finalOrder.deliveryCharge ?? 0;
-    finalOrder.remark         = finalOrder.remark         ?? '';
+    finalOrder.remark = finalOrder.remark ?? "";
 
-    log(`${tag} ✅ DOM parse complete — ${items.length} item(s), ₹${finalOrder.totalAmount}`);
+    log(
+      `${tag} ✅ DOM parse complete — ${items.length} item(s), ₹${finalOrder.totalAmount}`,
+    );
     return finalOrder;
-
   } catch (e) {
     err(`${tag} parseDomOrder crashed: ${e.message}`);
     return null;
@@ -910,56 +1118,82 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 // AI — AWS BEDROCK BASE CALL
 // ═══════════════════════════════════════════════════════════════════════════
 async function callBedrockAI(prompt) {
-  const keyId       = process.env.AWS_ACCESS_KEY_ID        || '';
-  const secretKey   = process.env.AWS_SECRET_ACCESS_KEY    || '';
-  const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK || '';
-  const endpointUrl = process.env.AWS_BEDROCK_ENDPOINT     || '';
-  const useBearer   = bearerToken || keyId.startsWith('BedrockAPIKey');
+  const keyId = process.env.AWS_ACCESS_KEY_ID || "";
+  const secretKey = process.env.AWS_SECRET_ACCESS_KEY || "";
+  const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK || "";
+  const endpointUrl = process.env.AWS_BEDROCK_ENDPOINT || "";
+  const useBearer = bearerToken || keyId.startsWith("BedrockAPIKey");
 
   if (useBearer) {
-    const token = bearerToken || (
-      secretKey.startsWith('ABSK')
-        ? Buffer.from(secretKey.substring(4), 'base64').toString('utf-8')
-        : ''
-    );
-    if (!token) { err('Bearer token not resolved'); return null; }
-    const url = endpointUrl || 'https://bedrock-runtime.ap-south-1.amazonaws.com';
+    const token =
+      bearerToken ||
+      (secretKey.startsWith("ABSK")
+        ? Buffer.from(secretKey.substring(4), "base64").toString("utf-8")
+        : "");
+    if (!token) {
+      err("Bearer token not resolved");
+      return null;
+    }
+    const url =
+      endpointUrl || "https://bedrock-runtime.ap-south-1.amazonaws.com";
     try {
       const res = await fetch(url, {
-        method:  'POST',
+        method: "POST",
         headers: {
-          'Content-Type':  'application/json',
-          'Authorization': 'Bearer ' + token,
-          'x-api-key':     keyId,
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + token,
+          "x-api-key": keyId,
         },
         body: JSON.stringify({
-          modelId:  process.env.AWS_BEDROCK_MODEL || 'qwen.qwen3-vl-235b-a22b',
-          system:   [{ text: 'You are a strict data extraction API. Return a SINGLE, VALID JSON object without markdown formatting.' }],
-          messages: [{ role: 'user', content: [{ text: prompt }] }],
+          modelId: process.env.AWS_BEDROCK_MODEL || "qwen.qwen3-vl-235b-a22b",
+          system: [
+            {
+              text: "You are a strict data extraction API. Return a SINGLE, VALID JSON object without markdown formatting.",
+            },
+          ],
+          messages: [{ role: "user", content: [{ text: prompt }] }],
         }),
       });
-      if (!res.ok) { err(`Bearer API ${res.status}: ${await res.text()}`); return null; }
+      if (!res.ok) {
+        err(`Bearer API ${res.status}: ${await res.text()}`);
+        return null;
+      }
       const json = await res.json();
-      return json.output?.message?.content?.[0]?.text
-          || json.content?.[0]?.text
-          || JSON.stringify(json);
-    } catch (e) { err(`Bearer API error: ${e.message}`); return null; }
+      return (
+        json.output?.message?.content?.[0]?.text ||
+        json.content?.[0]?.text ||
+        JSON.stringify(json)
+      );
+    } catch (e) {
+      err(`Bearer API error: ${e.message}`);
+      return null;
+    }
   }
 
-  if (!keyId || !secretKey) { err('No AWS credentials found.'); return null; }
+  if (!keyId || !secretKey) {
+    err("No AWS credentials found.");
+    return null;
+  }
   try {
-    const client  = new BedrockRuntimeClient({
-      region:      process.env.AWS_REGION || 'ap-south-1',
+    const client = new BedrockRuntimeClient({
+      region: process.env.AWS_REGION || "ap-south-1",
       credentials: { accessKeyId: keyId, secretAccessKey: secretKey },
     });
     const command = new ConverseCommand({
-      modelId:  process.env.AWS_BEDROCK_MODEL || 'qwen.qwen3-vl-235b-a22b',
-      system:   [{ text: 'You are a strict data extraction API. Return a SINGLE, VALID JSON object without markdown formatting.' }],
-      messages: [{ role: 'user', content: [{ text: prompt }] }],
+      modelId: process.env.AWS_BEDROCK_MODEL || "qwen.qwen3-vl-235b-a22b",
+      system: [
+        {
+          text: "You are a strict data extraction API. Return a SINGLE, VALID JSON object without markdown formatting.",
+        },
+      ],
+      messages: [{ role: "user", content: [{ text: prompt }] }],
     });
     const result = await client.send(command);
     return result.output?.message?.content?.[0]?.text;
-  } catch (e) { err(`Bedrock SDK error: ${e.name} - ${e.message}`); return null; }
+  } catch (e) {
+    err(`Bedrock SDK error: ${e.name} - ${e.message}`);
+    return null;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -980,7 +1214,7 @@ async function callBedrockWithRetry(prompt, maxRetries = 3) {
       await delay(backoff);
     }
   }
-  err('All AI retry attempts exhausted');
+  err("All AI retry attempts exhausted");
   return null;
 }
 
@@ -988,7 +1222,7 @@ async function callBedrockWithRetry(prompt, maxRetries = 3) {
 // AI OUTPUT VALIDATION
 // ═══════════════════════════════════════════════════════════════════════════
 function validateOrderData(data, vendorType) {
-  const errors   = [];
+  const errors = [];
   const warnings = [];
 
   if (!data.deliveryDate || !data.deliveryDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
@@ -996,32 +1230,47 @@ function validateOrderData(data, vendorType) {
   } else {
     const daysDiff = (new Date(data.deliveryDate) - new Date()) / 86400000;
     if (daysDiff < -1 || daysDiff > 30) {
-      warnings.push(`Suspicious deliveryDate: ${data.deliveryDate} (${daysDiff.toFixed(0)} days from today)`);
+      warnings.push(
+        `Suspicious deliveryDate: ${data.deliveryDate} (${daysDiff.toFixed(0)} days from today)`,
+      );
     }
   }
 
   if (data.deliveryTime && !data.deliveryTime.match(/^\d{2}:\d{2}$/)) {
     warnings.push(`Invalid deliveryTime format: "${data.deliveryTime}"`);
-    data.deliveryTime = '';
+    data.deliveryTime = "";
   }
 
   if (!data.items || data.items.length === 0) {
-    errors.push('No items found');
+    errors.push("No items found");
   } else {
-    const qtyHardCap = vendorType === 'railfood' ? 500 : 200;
+    const qtyHardCap = vendorType === "railfood" ? 500 : 200;
     for (const item of data.items) {
       if (item.quantity > qtyHardCap) {
-        warnings.push(`Suspiciously high quantity for "${item.name}": ${item.quantity} (capped at ${qtyHardCap})`);
+        warnings.push(
+          `Suspiciously high quantity for "${item.name}": ${item.quantity} (capped at ${qtyHardCap})`,
+        );
         item.quantity = qtyHardCap;
       }
       if (item.quantity <= 0) item.quantity = 1;
-      if (item.price < 0)    { warnings.push(`Negative price for "${item.name}"`); item.price = 0; }
-      if (item.price > 5000) { warnings.push(`Unusually high price for "${item.name}": ₹${item.price}`); }
+      if (item.price < 0) {
+        warnings.push(`Negative price for "${item.name}"`);
+        item.price = 0;
+      }
+      if (item.price > 5000) {
+        warnings.push(
+          `Unusually high price for "${item.name}": ₹${item.price}`,
+        );
+      }
     }
   }
 
-  if (data.totalAmount <= 0 && vendorType !== 'travelkhana' && vendorType !== 'yatribhojan') {
-    warnings.push('totalAmount is 0 or missing');
+  if (
+    data.totalAmount <= 0 &&
+    vendorType !== "travelkhana" &&
+    vendorType !== "yatribhojan"
+  ) {
+    warnings.push("totalAmount is 0 or missing");
   }
   if (data.totalAmount > 10000) {
     warnings.push(`Unusually high totalAmount: ₹${data.totalAmount}`);
@@ -1032,8 +1281,8 @@ function validateOrderData(data, vendorType) {
   }
 
   if (data.contactNo) {
-    const raw       = data.contactNo.trim();
-    const allDigits = raw.replace(/\D/g, '');
+    const raw = data.contactNo.trim();
+    const allDigits = raw.replace(/\D/g, "");
     if (allDigits.length === 10) {
       data.contactNo = allDigits;
     } else if (allDigits.length > 10) {
@@ -1044,21 +1293,25 @@ function validateOrderData(data, vendorType) {
         const first10 = allDigits.slice(0, 10);
         if (/^[6-9]/.test(first10)) {
           data.contactNo = first10;
-          warnings.push(`Multiple contact numbers — using first: "${first10}" from "${raw}"`);
+          warnings.push(
+            `Multiple contact numbers — using first: "${first10}" from "${raw}"`,
+          );
         } else {
           warnings.push(`Could not extract valid mobile from: "${raw}"`);
-          data.contactNo = '';
+          data.contactNo = "";
         }
       }
     } else {
       warnings.push(`Contact number not 10 digits: "${raw}"`);
-      data.contactNo = '';
+      data.contactNo = "";
     }
   }
 
-  if (!['COD', 'Prepaid'].includes(data.paymentType)) {
-    warnings.push(`Unknown paymentType "${data.paymentType}" — defaulting to COD`);
-    data.paymentType = 'COD';
+  if (!["COD", "Prepaid"].includes(data.paymentType)) {
+    warnings.push(
+      `Unknown paymentType "${data.paymentType}" — defaulting to COD`,
+    );
+    data.paymentType = "COD";
   }
 
   return { errors, warnings, data };
@@ -1072,20 +1325,24 @@ function validateOrderData(data, vendorType) {
 // ═══════════════════════════════════════════════════════════════════════════
 async function fillMissingFields(emailText, missingFieldsStr, tag) {
   const fieldDescriptions = {
-    deliveryDate: 'deliveryDate in YYYY-MM-DD format (e.g. 2026-06-06)',
-    deliveryTime: 'deliveryTime in HH:MM 24-hour format (e.g. 15:20)',
-    customerName: 'customerName (full name of the person who placed the order)',
-    trainInfo: 'trainInfo (train number and name, e.g. 22932 / JSM BDTS SF EXP)',
-    coach: 'coach (coach/berth number, e.g. B4/63)',
-    contactNo: 'contactNo (10-digit mobile number)',
-    orderNo: 'orderNo (order reference number)',
-    paymentType: 'paymentType (COD or Prepaid)',
-    items: 'items (array of {name, quantity, price})',
-    totalAmount: 'totalAmount (total order value as number)',
-    tax: 'tax (GST/tax amount as number)',
+    deliveryDate: "deliveryDate in YYYY-MM-DD format (e.g. 2026-06-06)",
+    deliveryTime: "deliveryTime in HH:MM 24-hour format (e.g. 15:20)",
+    customerName: "customerName (full name of the person who placed the order)",
+    trainInfo:
+      "trainInfo (train number and name, e.g. 22932 / JSM BDTS SF EXP)",
+    coach: "coach (coach/berth number, e.g. B4/63)",
+    contactNo: "contactNo (10-digit mobile number)",
+    orderNo: "orderNo (order reference number)",
+    paymentType: "paymentType (COD or Prepaid)",
+    items: "items (array of {name, quantity, price})",
+    totalAmount: "totalAmount (total order value as number)",
+    tax: "tax (GST/tax amount as number)",
   };
 
-  const fieldList = missingFieldsStr.split(', ').map(f => fieldDescriptions[f] || f).join(', ');
+  const fieldList = missingFieldsStr
+    .split(", ")
+    .map((f) => fieldDescriptions[f] || f)
+    .join(", ");
 
   const prompt = `Extract ONLY the following fields from this train food delivery order email.
 Return a SINGLE VALID JSON object containing ONLY these fields — no extra fields, no markdown formatting, no explanation.
@@ -1104,11 +1361,21 @@ ${emailText}`;
 
   const result = await callBedrockWithRetry(prompt);
   if (!result) return null;
-  try { return JSON.parse(result); } catch (_) {}
+  try {
+    return JSON.parse(result);
+  } catch (_) {}
   const m = result.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (m) { try { return JSON.parse(m[1]); } catch (_) {} }
+  if (m) {
+    try {
+      return JSON.parse(m[1]);
+    } catch (_) {}
+  }
   const obj = result.match(/\{[\s\S]*\}/);
-  if (obj) { try { return JSON.parse(obj[0]); } catch (_) {} }
+  if (obj) {
+    try {
+      return JSON.parse(obj[0]);
+    } catch (_) {}
+  }
   warn(`${tag} fillMissingFields: could not parse AI response as JSON`);
   return null;
 }
@@ -1118,20 +1385,25 @@ ${emailText}`;
 // ═══════════════════════════════════════════════════════════════════════════
 async function parseWithAWS(rawText, subject, senderEmail) {
   const lowerFrom = senderEmail.toLowerCase();
-  let vendorName = '', vendorType = 'generic';
+  let vendorName = "",
+    vendorType = "generic";
 
   for (const v of VENDOR_MAP) {
-    if (lowerFrom.includes(v.match)) { vendorName = v.name; vendorType = v.type; break; }
+    if (lowerFrom.includes(v.match)) {
+      vendorName = v.name;
+      vendorType = v.type;
+      break;
+    }
   }
   if (!vendorName) {
     try {
-      const parts = lowerFrom.split('@')[1]?.split('.') || [];
-      const root  = parts.length > 2 ? parts[parts.length - 2] : parts[0];
-      vendorName  = root.charAt(0).toUpperCase() + root.slice(1);
+      const parts = lowerFrom.split("@")[1]?.split(".") || [];
+      const root = parts.length > 2 ? parts[parts.length - 2] : parts[0];
+      vendorName = root.charAt(0).toUpperCase() + root.slice(1);
     } catch (_) {}
   }
 
-  log(`   🏷️ Vendor: ${vendorName || 'Unknown'} (${vendorType})`);
+  log(`   🏷️ Vendor: ${vendorName || "Unknown"} (${vendorType})`);
   const vendorRule = VENDOR_RULES[vendorType] || VENDOR_RULES.generic;
 
   const prompt = `
@@ -1166,11 +1438,14 @@ ${rawText.substring(0, 15000)}`;
 
   try {
     const raw = await callBedrockWithRetry(prompt);
-    if (!raw) { err('Empty response from Bedrock after retries'); return null; }
+    if (!raw) {
+      err("Empty response from Bedrock after retries");
+      return null;
+    }
 
-    const data = JSON.parse(raw.replace(/```json|```/g, '').trim());
-    data.orderNo    = data.orderNo?.toString().trim() || '';
-    data.pnr        = data.pnr?.toString().trim() || '';
+    const data = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    data.orderNo = data.orderNo?.toString().trim() || "";
+    data.pnr = data.pnr?.toString().trim() || "";
     if (!data.orderNo && !data.pnr) data.orderNo = `AUTO_${Date.now()}`;
     data.vendorName = vendorName;
 
@@ -1178,25 +1453,38 @@ ${rawText.substring(0, 15000)}`;
       let sub = 0;
       for (const item of data.items) {
         item.quantity = parseInt(item.quantity, 10) || 1;
-        item.price    = parseFloat(item.price) || 0;
+        item.price = parseFloat(item.price) || 0;
         if (item.quantity <= 0) item.quantity = 1;
         sub += item.price * item.quantity;
-        log(`      ${item.name}: ₹${item.price} × ${item.quantity} = ₹${item.price * item.quantity}`);
+        log(
+          `      ${item.name}: ₹${item.price} × ${item.quantity} = ₹${item.price * item.quantity}`,
+        );
       }
-      if (vendorType !== 'railfood' && Math.abs((parseFloat(data.subTotal) || 0) - sub) > 5) {
+      if (
+        vendorType !== "railfood" &&
+        Math.abs((parseFloat(data.subTotal) || 0) - sub) > 5
+      ) {
         warn(`      SubTotal mismatch — correcting to ₹${sub}`);
         data.subTotal = sub;
       }
     }
 
-    const { errors, warnings, data: validatedData } = validateOrderData(data, vendorType);
-    if (warnings.length > 0) warn(`   ⚠️ Validation warnings: ${warnings.join(' | ')}`);
-    if (errors.length   > 0) {
-      err(`   ❌ Validation FAILED: ${errors.join(' | ')}`);
+    const {
+      errors,
+      warnings,
+      data: validatedData,
+    } = validateOrderData(data, vendorType);
+    if (warnings.length > 0)
+      warn(`   ⚠️ Validation warnings: ${warnings.join(" | ")}`);
+    if (errors.length > 0) {
+      err(`   ❌ Validation FAILED: ${errors.join(" | ")}`);
       return null;
     }
     return validatedData;
-  } catch (e) { err(`Parse error: ${e.message}`); return null; }
+  } catch (e) {
+    err(`Parse error: ${e.message}`);
+    return null;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1207,13 +1495,13 @@ async function parseUpdateEmail(rawText, subject, existingOrder) {
 You are an ORDER UPDATE extractor. This email is a CHANGE NOTIFICATION for an existing order.
 
 Current DB values:
-- Coach/Seat: ${existingOrder.coach || 'N/A'}
-- Delivery Date: ${existingOrder.deliveryDate || 'N/A'}
-- Delivery Time: ${existingOrder.deliveryTime || 'N/A'}
-- Contact No: ${existingOrder.contactNo || 'N/A'}
-- Train Info: ${existingOrder.trainInfo || 'N/A'}
-- Payment: ${existingOrder.paymentType || 'N/A'}
-- Total: ${existingOrder.totalAmount || 'N/A'}
+- Coach/Seat: ${existingOrder.coach || "N/A"}
+- Delivery Date: ${existingOrder.deliveryDate || "N/A"}
+- Delivery Time: ${existingOrder.deliveryTime || "N/A"}
+- Contact No: ${existingOrder.contactNo || "N/A"}
+- Train Info: ${existingOrder.trainInfo || "N/A"}
+- Payment: ${existingOrder.paymentType || "N/A"}
+- Total: ${existingOrder.totalAmount || "N/A"}
 - Items: ${JSON.stringify(existingOrder.items || [])}
 
 STRICT RULES:
@@ -1232,27 +1520,48 @@ BODY: ${rawText.substring(0, 10000)}`;
   try {
     const raw = await callBedrockWithRetry(prompt);
     if (!raw) return null;
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
-  } catch (e) { err(`Update parse error: ${e.message}`); return null; }
+    return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  } catch (e) {
+    err(`Update parse error: ${e.message}`);
+    return null;
+  }
 }
 
 function buildChangePayload(existingOrder, updateResult) {
-  const FIELDS    = ['coach','deliveryDate','deliveryTime','contactNo','trainInfo','paymentType','totalAmount','items','subTotal'];
-  const changes   = {};
+  const FIELDS = [
+    "coach",
+    "deliveryDate",
+    "deliveryTime",
+    "contactNo",
+    "trainInfo",
+    "paymentType",
+    "totalAmount",
+    "items",
+    "subTotal",
+  ];
+  const changes = {};
   const changeLog = [];
 
   for (const field of FIELDS) {
     const aiVal = updateResult[field];
     if (aiVal === null || aiVal === undefined) continue;
-    if (field === 'items') {
-      if (JSON.stringify(aiVal) === JSON.stringify(existingOrder.items || [])) continue;
+    if (field === "items") {
+      if (JSON.stringify(aiVal) === JSON.stringify(existingOrder.items || []))
+        continue;
       changes.items = aiVal;
-      changeLog.push('items updated');
+      changeLog.push("items updated");
       continue;
     }
     const newVal = aiVal.toString().trim();
-    const oldVal = (existingOrder[field] || '').toString().trim();
-    if (!newVal || newVal === oldVal || newVal === 'N/A' || newVal === 'YYYY-MM-DD' || newVal === 'HH:MM') continue;
+    const oldVal = (existingOrder[field] || "").toString().trim();
+    if (
+      !newVal ||
+      newVal === oldVal ||
+      newVal === "N/A" ||
+      newVal === "YYYY-MM-DD" ||
+      newVal === "HH:MM"
+    )
+      continue;
     changes[field] = aiVal;
     changeLog.push(`${field}: "${oldVal}" → "${newVal}"`);
   }
@@ -1271,7 +1580,7 @@ function buildChangePayload(existingOrder, updateResult) {
 //   variable inside runPollingCycle — they become dead code.
 //   Optionally fill in markEmailAsRead() to mark emails as read after saving.
 // ═══════════════════════════════════════════════════════════════════════════
-const FETCH_SINCE_FIXED = new Date('2026-06-12T19:30:00.000Z');
+const FETCH_SINCE_FIXED = new Date("2026-06-06T13:30:00.000Z");
 
 function getFetchSince() {
   const rollingWindow = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
@@ -1282,28 +1591,36 @@ function getFetchSince() {
 // EMAIL PROCESSOR
 // ═══════════════════════════════════════════════════════════════════════════
 async function processEmail(
-  item, connection, clientId, orderMap, emailSet,
-  tag, blockedSenders, sessionUIDCache
+  item,
+  connection,
+  clientId,
+  orderMap,
+  emailSet,
+  tag,
+  blockedSenders,
+  sessionUIDCache,
 ) {
-  const uid    = item.attributes.uid;
+  const uid = item.attributes.uid;
   const uidStr = uid.toString();
 
   try {
     // ── 5-layer duplicate guard ───────────────────────────────────────────
-    if (sessionUIDCache.has(uid)) return;                          // Guard 1
+    if (sessionUIDCache.has(uid)) return; // Guard 1
 
-    if (emailSet.has(uidStr)) {                                    // Guard 2
+    if (emailSet.has(uidStr)) {
+      // Guard 2
       sessionUIDCache.add(uid);
       return;
     }
 
-    try {                                                          // Guard 3
+    try {
+      // Guard 3
       const processedSnap = await getDoc(
-        doc(db, 'processed_emails', emailDocId(clientId, uidStr))
+        doc(db, "processed_emails", emailDocId(clientId, uidStr)),
       );
       if (processedSnap.exists()) {
         const prevStatus = processedSnap.data().status;
-        if (prevStatus !== 'incomplete_data') {
+        if (prevStatus !== "incomplete_data") {
           log(`${tag} UID ${uidStr} already in DB (${prevStatus}) — skipping`);
           emailSet.add(uidStr);
           sessionUIDCache.add(uid);
@@ -1312,46 +1629,66 @@ async function processEmail(
         log(`${tag} UID ${uidStr} was incomplete — retrying parse`);
       }
     } catch (e) {
-      warn(`${tag} Firestore pre-check failed for UID ${uidStr}: ${e.message} — processing anyway`);
+      warn(
+        `${tag} Firestore pre-check failed for UID ${uidStr}: ${e.message} — processing anyway`,
+      );
     }
 
-    const fullMsg = await connection.search([['UID', uid]], { bodies: [''], markSeen: false });
+    const fullMsg = await connection.search([["UID", uid]], {
+      bodies: [""],
+      markSeen: false,
+    });
     if (!fullMsg || fullMsg.length === 0) return;
-    const parsed = await simpleParser(fullMsg[0].parts.find(p => p.which === '').body);
+    const parsed = await simpleParser(
+      fullMsg[0].parts.find((p) => p.which === "").body,
+    );
 
     // Guard 4 — date filter
-    const emailDate   = parsed.date ? new Date(parsed.date) : new Date();
+    const emailDate = parsed.date ? new Date(parsed.date) : new Date();
     const FETCH_SINCE = getFetchSince();
-    if (emailDate < FETCH_SINCE) {                                 // Guard 4
+    if (emailDate < FETCH_SINCE) {
+      // Guard 4
       sessionUIDCache.add(uid);
       return;
     }
 
-    const subject     = parsed.subject || 'No Subject';
-    const fromAddress = parsed.from?.value?.[0]?.address || parsed.from?.text || 'Unknown';
-    const lowerFrom   = fromAddress.toLowerCase();
+    const subject = parsed.subject || "No Subject";
+    const fromAddress =
+      parsed.from?.value?.[0]?.address || parsed.from?.text || "Unknown";
+    const lowerFrom = fromAddress.toLowerCase();
 
-    if (blockedSenders.some(bs => lowerFrom.includes(bs) || lowerFrom === bs)) {
+    if (
+      blockedSenders.some((bs) => lowerFrom.includes(bs) || lowerFrom === bs)
+    ) {
       log(`${tag} Blocked sender: ${fromAddress}`);
       sessionUIDCache.add(uid);
-      await recordProcessedEmail(uidStr, '', 'blocked_sender', clientId);
+      await recordProcessedEmail(uidStr, "", "blocked_sender", clientId);
       return;
     }
 
     // Guard 5 — subject keyword filter
-    const vendorFromSender = VENDOR_MAP.find(v => lowerFrom.includes(v.match));
-    const subjectMatches   = /Order|Booking|PNR|Reservation|Invoice|Bill|Catering|Check Order/i.test(subject);
+    const vendorFromSender = VENDOR_MAP.find((v) =>
+      lowerFrom.includes(v.match),
+    );
+    const subjectMatches =
+      /Order|Booking|PNR|Reservation|Invoice|Bill|Catering|Check Order/i.test(
+        subject,
+      );
 
-    if (!subjectMatches && !vendorFromSender) {                    // Guard 5
+    if (!subjectMatches && !vendorFromSender) {
+      // Guard 5
       sessionUIDCache.add(uid);
       return;
     }
     if (!subjectMatches && vendorFromSender) {
-      warn(`${tag} Known vendor ${vendorFromSender.name} with unusual subject: "${subject}" — processing anyway`);
+      warn(
+        `${tag} Known vendor ${vendorFromSender.name} with unusual subject: "${subject}" — processing anyway`,
+      );
     }
 
     // ── Detect vendor ─────────────────────────────────────────────────────
-    let detectedType = 'generic', detectedName = '';
+    let detectedType = "generic",
+      detectedName = "";
     for (const v of VENDOR_MAP) {
       if (lowerFrom.includes(v.match)) {
         detectedType = v.type;
@@ -1361,8 +1698,8 @@ async function processEmail(
     }
     if (!detectedName) {
       try {
-        const parts = lowerFrom.split('@')[1]?.split('.') || [];
-        const root  = parts.length > 2 ? parts[parts.length - 2] : parts[0];
+        const parts = lowerFrom.split("@")[1]?.split(".") || [];
+        const root = parts.length > 2 ? parts[parts.length - 2] : parts[0];
         detectedName = root.charAt(0).toUpperCase() + root.slice(1);
       } catch (_) {}
     }
@@ -1371,29 +1708,33 @@ async function processEmail(
     const skipPatterns = VENDOR_SKIP_SUBJECTS[detectedType];
     if (skipPatterns) {
       const lowerSubject = subject.toLowerCase();
-      if (skipPatterns.some(p => lowerSubject.includes(p))) {
+      if (skipPatterns.some((p) => lowerSubject.includes(p))) {
         log(`${tag} Skipping fake email for ${detectedName}: "${subject}"`);
         sessionUIDCache.add(uid);
-        await recordProcessedEmail(uidStr, '', 'skipped_fake', clientId);
+        await recordProcessedEmail(uidStr, "", "skipped_fake", clientId);
         return;
       }
     }
 
     // ── Build fullText for AI path ────────────────────────────────────────
-    let fullText = parsed.text || '';
+    let fullText = parsed.text || "";
     if (!fullText && parsed.html) {
       fullText = htmlToText(parsed.html);
-      log(`${tag} HTML-only email — stripped to plain text (${fullText.length} chars)`);
+      log(
+        `${tag} HTML-only email — stripped to plain text (${fullText.length} chars)`,
+      );
     }
-    for (const att of (parsed.attachments || [])) {
-      if (att.contentType === 'application/pdf') {
+    for (const att of parsed.attachments || []) {
+      if (att.contentType === "application/pdf") {
         try {
-          const pdf     = await pdfParse(att.content);
-          const pdfText = (pdf.text || '').trim();
+          const pdf = await pdfParse(att.content);
+          const pdfText = (pdf.text || "").trim();
           if (pdfText.length < 50) {
-            warn(`${tag} PDF extracted only ${pdfText.length} chars — may be image-based`);
+            warn(
+              `${tag} PDF extracted only ${pdfText.length} chars — may be image-based`,
+            );
           }
-          if (pdfText) fullText += '\n\n--- PDF ---\n' + pdfText;
+          if (pdfText) fullText += "\n\n--- PDF ---\n" + pdfText;
         } catch (e) {
           warn(`${tag} PDF parse error: ${e.message}`);
         }
@@ -1403,33 +1744,57 @@ async function processEmail(
     log(`${tag} 🤖 Parsing: "${subject}" (From: ${fromAddress})`);
 
     // ── PATH A: DOM parsing ───────────────────────────────────────────────
-    let orderData  = null;
-    const domCfg   = VENDOR_DOM_CONFIGS[detectedType];
+    let orderData = null;
+    const domCfg = VENDOR_DOM_CONFIGS[detectedType];
 
     if (domCfg && parsed.html) {
       log(`${tag}    🏗️  DOM parsing for ${detectedName}`);
-      orderData = parseDomOrder(parsed.html, detectedName, detectedType, domCfg, tag);
+      orderData = parseDomOrder(
+        parsed.html,
+        detectedName,
+        detectedType,
+        domCfg,
+        tag,
+      );
       if (orderData) {
         log(`${tag}    ✅ DOM parse succeeded — Bedrock not called`);
         // ── Check if DOM got most fields but some are missing ──────────
         const missingFields = getMissingFields(orderData);
         if (missingFields) {
-          log(`${tag}    🔄 DOM partial — filling missing: [${missingFields}] via targeted AI`);
+          log(
+            `${tag}    🔄 DOM partial — filling missing: [${missingFields}] via targeted AI`,
+          );
           const fill = await fillMissingFields(fullText, missingFields, tag);
           if (fill) {
             let merged = 0;
             for (const [key, val] of Object.entries(fill)) {
-              if (val !== null && val !== undefined && val !== '' && val !== 'N/A') {
+              if (
+                val !== null &&
+                val !== undefined &&
+                val !== "" &&
+                val !== "N/A"
+              ) {
                 const current = orderData[key];
-                if (current === null || current === undefined || current === '' || current === 'N/A' || current === 'Unknown' || current === 'YYYY-MM-DD') {
+                if (
+                  current === null ||
+                  current === undefined ||
+                  current === "" ||
+                  current === "N/A" ||
+                  current === "Unknown" ||
+                  current === "YYYY-MM-DD"
+                ) {
                   orderData[key] = val;
                   merged++;
                 }
               }
             }
-            log(`${tag}    ✅ AI filled ${merged}/${missingFields.split(', ').length} missing fields`);
+            log(
+              `${tag}    ✅ AI filled ${merged}/${missingFields.split(", ").length} missing fields`,
+            );
           } else {
-            warn(`${tag}    ⚠️  AI fill failed — fields will remain missing, retry on next cycle`);
+            warn(
+              `${tag}    ⚠️  AI fill failed — fields will remain missing, retry on next cycle`,
+            );
           }
         }
       } else {
@@ -1454,11 +1819,15 @@ async function processEmail(
       return;
     }
 
-    const finalOrderNo = (orderData.orderNo || orderData.pnr || '')
-      .toString().replace(/\//g, '-').trim();
+    const finalOrderNo = (orderData.orderNo || orderData.pnr || "")
+      .toString()
+      .replace(/\//g, "-")
+      .trim();
 
-    if (!finalOrderNo || finalOrderNo.startsWith('AUTO_')) {
-      log(`${tag}    ⚠️ No valid order number extracted — stays unread for retry`);
+    if (!finalOrderNo || finalOrderNo.startsWith("AUTO_")) {
+      log(
+        `${tag}    ⚠️ No valid order number extracted — stays unread for retry`,
+      );
       sessionUIDCache.add(uid);
       return;
     }
@@ -1466,47 +1835,72 @@ async function processEmail(
     // ── Per-order lock ────────────────────────────────────────────────────
     const lockKey = orderDocId(clientId, finalOrderNo);
     if (!acquireLock(lockKey)) {
-      log(`${tag} #${finalOrderNo} already being processed in parallel — skipping`);
+      log(
+        `${tag} #${finalOrderNo} already being processed in parallel — skipping`,
+      );
       return;
     }
 
     try {
-      const today             = todayStr();
-      const orderDeliveryDate = (orderData.deliveryDate || '').trim();
-      let existingOrder       = null;
+      const today = todayStr();
+      const orderDeliveryDate = (orderData.deliveryDate || "").trim();
+      let existingOrder = null;
 
       if (orderDeliveryDate === today) {
-        existingOrder = orderMap.get(orderDocId(clientId, finalOrderNo)) || null;
+        existingOrder =
+          orderMap.get(orderDocId(clientId, finalOrderNo)) || null;
       } else if (orderDeliveryDate) {
-        log(`${tag}    📅 Order date ${orderDeliveryDate} ≠ today ${today} — Firestore read for #${finalOrderNo}`);
+        log(
+          `${tag}    📅 Order date ${orderDeliveryDate} ≠ today ${today} — Firestore read for #${finalOrderNo}`,
+        );
         try {
-          const snap = await getDoc(doc(db, 'orders', orderDocId(clientId, finalOrderNo)));
+          const snap = await getDoc(
+            doc(db, "orders", orderDocId(clientId, finalOrderNo)),
+          );
           if (snap.exists()) existingOrder = snap.data();
-        } catch (e) { warn(`Firestore read failed: ${e.message}`); }
+        } catch (e) {
+          warn(`Firestore read failed: ${e.message}`);
+        }
       } else {
-        existingOrder = orderMap.get(orderDocId(clientId, finalOrderNo)) || null;
+        existingOrder =
+          orderMap.get(orderDocId(clientId, finalOrderNo)) || null;
         if (!existingOrder) {
           try {
-            const snap = await getDoc(doc(db, 'orders', orderDocId(clientId, finalOrderNo)));
+            const snap = await getDoc(
+              doc(db, "orders", orderDocId(clientId, finalOrderNo)),
+            );
             if (snap.exists()) existingOrder = snap.data();
-          } catch (e) { warn(`Firestore read failed: ${e.message}`); }
+          } catch (e) {
+            warn(`Firestore read failed: ${e.message}`);
+          }
         }
       }
 
       // ── ORDER EXISTS → check for explicit changes ──────────────────────
       if (existingOrder) {
-        log(`${tag}    🔄 #${finalOrderNo} in DB — checking for explicit changes...`);
-        const updateResult = await parseUpdateEmail(fullText, subject, existingOrder);
+        log(
+          `${tag}    🔄 #${finalOrderNo} in DB — checking for explicit changes...`,
+        );
+        const updateResult = await parseUpdateEmail(
+          fullText,
+          subject,
+          existingOrder,
+        );
         if (!updateResult) {
           log(`${tag}    ❌ Update parse failed — stays unread`);
           return;
         }
         log(`${tag}    🧠 ${updateResult._thinking}`);
 
-        const { changes, changeLog } = buildChangePayload(existingOrder, updateResult);
+        const { changes, changeLog } = buildChangePayload(
+          existingOrder,
+          updateResult,
+        );
 
         if (Object.keys(changes).length === 0) {
-          log(`${tag}    ℹ️ No explicit changes for #${finalOrderNo} — recording as duplicate`);
+          log(
+            `${tag}    ℹ️ No explicit changes for #${finalOrderNo} — recording as duplicate`,
+          );
         } else {
           const updatePayload = {
             ...changes,
@@ -1517,29 +1911,44 @@ async function processEmail(
                 updatedAt: new Date().toISOString(),
                 subject,
                 changes,
-                remark: updateResult.remark || `Updated: ${changeLog.join(', ')}`,
+                remark:
+                  updateResult.remark || `Updated: ${changeLog.join(", ")}`,
               },
             ],
           };
-          await updateDoc(doc(db, 'orders', orderDocId(clientId, finalOrderNo)), updatePayload);
-          orderMap.set(orderDocId(clientId, finalOrderNo), { ...existingOrder, ...changes });
-          log(`${tag}    ✅ UPDATED #${finalOrderNo}: ${changeLog.join(', ')}`);
+          await updateDoc(
+            doc(db, "orders", orderDocId(clientId, finalOrderNo)),
+            updatePayload,
+          );
+          orderMap.set(orderDocId(clientId, finalOrderNo), {
+            ...existingOrder,
+            ...changes,
+          });
+          log(`${tag}    ✅ UPDATED #${finalOrderNo}: ${changeLog.join(", ")}`);
         }
 
         sessionUIDCache.add(uid);
         await recordProcessedEmail(
-          uidStr, finalOrderNo,
-          Object.keys(changes).length > 0 ? 'update_applied' : 'duplicate',
-          clientId
+          uidStr,
+          finalOrderNo,
+          Object.keys(changes).length > 0 ? "update_applied" : "duplicate",
+          clientId,
         );
 
-      // ── NEW ORDER → validate then save ────────────────────────────────
+        // ── NEW ORDER → validate then save ────────────────────────────────
       } else {
         log(`${tag}    🆕 New order #${finalOrderNo} — validating fields...`);
         const missing = getMissingFields(orderData);
         if (missing) {
-          log(`${tag}    ⚠️ INCOMPLETE — missing: [${missing}] — stays UNREAD for retry`);
-          await recordProcessedEmail(uidStr, finalOrderNo, 'incomplete_data', clientId);
+          log(
+            `${tag}    ⚠️ INCOMPLETE — missing: [${missing}] — stays UNREAD for retry`,
+          );
+          await recordProcessedEmail(
+            uidStr,
+            finalOrderNo,
+            "incomplete_data",
+            clientId,
+          );
           // ✅ FIX 5: sessionUIDCache NOT updated here — allow retry next cycle.
           // recordProcessedEmail also skips emailSet for 'incomplete_data'.
           return;
@@ -1547,29 +1956,31 @@ async function processEmail(
 
         const newDoc = {
           ...orderData,
-          subTotal:       cleanFloat(orderData.subTotal),
-          tax:            cleanFloat(orderData.tax),
+          subTotal: cleanFloat(orderData.subTotal),
+          tax: cleanFloat(orderData.tax),
           deliveryCharge: cleanFloat(orderData.deliveryCharge),
-          totalAmount:    cleanFloat(orderData.totalAmount),
-          remark:         orderData.remark || '',
-          orderNo:        finalOrderNo,
+          totalAmount: cleanFloat(orderData.totalAmount),
+          remark: orderData.remark || "",
+          orderNo: finalOrderNo,
           clientId,
-          createdAt:      new Date().toISOString(),
-          status:         'Active',
-          updateHistory:  [],
+          createdAt: new Date().toISOString(),
+          status: "Active",
+          updateHistory: [],
         };
 
-        await setDoc(doc(db, 'orders', orderDocId(clientId, finalOrderNo)), newDoc);
+        await setDoc(
+          doc(db, "orders", orderDocId(clientId, finalOrderNo)),
+          newDoc,
+        );
         orderMap.set(orderDocId(clientId, finalOrderNo), newDoc);
         log(`${tag}    ✅ SAVED #${finalOrderNo} | ₹${orderData.totalAmount}`);
 
         sessionUIDCache.add(uid);
-        await recordProcessedEmail(uidStr, finalOrderNo, 'success', clientId);
+        await recordProcessedEmail(uidStr, finalOrderNo, "success", clientId);
       }
     } finally {
       releaseLock(lockKey);
     }
-
   } catch (e) {
     err(`${tag} processEmail error for UID ${uid}: ${e.message}`);
   }
@@ -1578,24 +1989,29 @@ async function processEmail(
 // ═══════════════════════════════════════════════════════════════════════════
 // MULTI-TENANT IMAP POLLER
 // ═══════════════════════════════════════════════════════════════════════════
-async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessName) {
+async function pollClientInbox(
+  clientId,
+  emailAddr,
+  appPassword,
+  clientBusinessName,
+) {
   const tag = `[${clientBusinessName}]`;
   log(`${tag} Starting IMAP polling for ${emailAddr}`);
 
   await warmEmailCache(clientId);
 
-  let cancelled      = false;
-  let activeConn     = null;
-  let isPaused       = false;
+  let cancelled = false;
+  let activeConn = null;
+  let isPaused = false;
   let blockedSenders = [];
 
   async function refreshClientSettings() {
     try {
-      const snap = await getDoc(doc(db, 'clients', clientId));
+      const snap = await getDoc(doc(db, "clients", clientId));
       if (snap.exists()) {
-        isPaused       = snap.data().emailPaused === true;
+        isPaused = snap.data().emailPaused === true;
         blockedSenders = (snap.data().blockedSenders || [])
-          .map(s => s.toLowerCase().trim())
+          .map((s) => s.toLowerCase().trim())
           .filter(Boolean);
       }
     } catch (_) {}
@@ -1603,13 +2019,13 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
 
   const IMAP_CONFIG = {
     imap: {
-      user:        emailAddr,
-      password:    appPassword.replace(/\s/g, ''),
-      host:        'imap.gmail.com',
-      port:        993,
-      tls:         true,
+      user: emailAddr,
+      password: appPassword.replace(/\s/g, ""),
+      host: "imap.gmail.com",
+      port: 993,
+      tls: true,
       authTimeout: 5000,
-      tlsOptions:  { rejectUnauthorized: false },
+      tlsOptions: { rejectUnauthorized: false },
     },
   };
 
@@ -1619,38 +2035,53 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
     if (cancelled) return;
     try {
       await refreshClientSettings();
-      if (isPaused) { log(`${tag} PAUSED — skipping cycle`); return; }
+      if (isPaused) {
+        log(`${tag} PAUSED — skipping cycle`);
+        return;
+      }
 
       const FETCH_SINCE = getFetchSince();
 
       const messages = await Promise.race([
-        connection.search(
-          [['SINCE', FETCH_SINCE]],
-          { bodies: ['HEADER.FIELDS (SUBJECT)'], markSeen: false }
+        connection.search([["SINCE", FETCH_SINCE]], {
+          bodies: ["HEADER.FIELDS (SUBJECT)"],
+          markSeen: false,
+        }),
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error("IMAP_HANG")), 15000),
         ),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('IMAP_HANG')), 15000)),
       ]);
 
-      const today    = todayStr();
+      const today = todayStr();
       const orderMap = getOrderMap(today, clientId);
       const emailSet = getEmailSet(today, clientId);
 
-      const newMessages = messages.filter(m => !sessionUIDCache.has(m.attributes.uid));
-      if (newMessages.length > 0) log(`${tag} 📩 ${newMessages.length} email(s) to process`);
+      const newMessages = messages.filter(
+        (m) => !sessionUIDCache.has(m.attributes.uid),
+      );
+      if (newMessages.length > 0)
+        log(`${tag} 📩 ${newMessages.length} email(s) to process`);
 
       const BATCH_SIZE = 3;
       for (let i = 0; i < newMessages.length; i += BATCH_SIZE) {
         if (cancelled) break;
         const batch = newMessages.slice(i, i + BATCH_SIZE);
         await Promise.allSettled(
-          batch.map(item => processEmail(
-            item, connection, clientId, orderMap, emailSet,
-            tag, blockedSenders, sessionUIDCache
-          ))
+          batch.map((item) =>
+            processEmail(
+              item,
+              connection,
+              clientId,
+              orderMap,
+              emailSet,
+              tag,
+              blockedSenders,
+              sessionUIDCache,
+            ),
+          ),
         );
         if (i + BATCH_SIZE < newMessages.length) await delay(2000);
       }
-
     } catch (e) {
       err(`${tag} Cycle error: ${e.message}`);
       throw e;
@@ -1671,14 +2102,16 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
 
       connection = await imaps.connect(IMAP_CONFIG);
       activeConn = connection;
-      await connection.openBox('INBOX');
+      await connection.openBox("INBOX");
       sessionUIDCache = new Set();
       log(`${tag} ✅ Connected to inbox`);
 
       async function cycle() {
         if (cancelled) {
           log(`${tag} Polling cancelled — closing IMAP connection`);
-          try { connection.end(); } catch (_) {}
+          try {
+            connection.end();
+          } catch (_) {}
           activeConn = null;
           return;
         }
@@ -1687,11 +2120,13 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
         } catch (e) {
           if (cancelled) return;
           err(`${tag} Reconnecting after error: ${e.message}`);
-          try { connection.end(); } catch (_) {}
+          try {
+            connection.end();
+          } catch (_) {}
           try {
             connection = await imaps.connect(IMAP_CONFIG);
             activeConn = connection;
-            await connection.openBox('INBOX');
+            await connection.openBox("INBOX");
             sessionUIDCache = new Set();
             log(`${tag} ✅ Reconnected`);
           } catch (e2) {
@@ -1704,7 +2139,6 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
       }
 
       cycle();
-
     } catch (error) {
       if (cancelled) return;
       err(`${tag} IMAP connect failed: ${error.message} — retry in 60s`);
@@ -1718,7 +2152,9 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
     cancelled = true;
     log(`${tag} Stop requested`);
     if (activeConn) {
-      try { activeConn.end(); } catch (_) {}
+      try {
+        activeConn.end();
+      } catch (_) {}
       activeConn = null;
     }
   };
@@ -1729,33 +2165,39 @@ async function pollClientInbox(clientId, emailAddr, appPassword, clientBusinessN
 // ═══════════════════════════════════════════════════════════════════════════
 async function watchClients() {
   await backendAuthReady;
-  log('MIGME: Watching for active clients...');
+  log("MIGME: Watching for active clients...");
 
   const activePolls = new Map();
 
   onSnapshot(
-    query(collection(db, 'clients'), where('active', '==', true)),
+    query(collection(db, "clients"), where("active", "==", true)),
     (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
-        const data      = change.doc.data();
+        const data = change.doc.data();
         const clientKey = change.doc.id;
 
-        if (change.type === 'added') {
+        if (change.type === "added") {
           if (activePolls.has(clientKey)) return;
           log(`Starting polling for ${data.businessName} (${data.email})`);
           await warmOrderCache(clientKey);
           if (activePolls.has(clientKey)) return;
-          const plainPassword = /^[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*$/.test(data.appPassword)
-            ? decrypt(data.appPassword)
-            : data.appPassword;
+          const plainPassword =
+            /^[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*$/.test(
+              data.appPassword,
+            )
+              ? decrypt(data.appPassword)
+              : data.appPassword;
           const stopFn = await pollClientInbox(
-            clientKey, data.email, plainPassword, data.businessName
+            clientKey,
+            data.email,
+            plainPassword,
+            data.businessName,
           );
           activePolls.set(clientKey, stopFn);
           globalStopFns.add(stopFn);
         }
 
-        if (change.type === 'removed') {
+        if (change.type === "removed") {
           const stopFn = activePolls.get(clientKey);
           if (stopFn) {
             log(`Stopping polling for ${data.businessName || clientKey}`);
@@ -1765,16 +2207,16 @@ async function watchClients() {
           }
         }
       });
-    }
+    },
   );
 
   onSnapshot(
-    query(collection(db, 'clients'), where('active', '==', false)),
+    query(collection(db, "clients"), where("active", "==", false)),
     (snapshot) => {
       snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
+        if (change.type === "added") {
           const clientKey = change.doc.id;
-          const stopFn    = activePolls.get(clientKey);
+          const stopFn = activePolls.get(clientKey);
           if (stopFn) {
             log(`Client ${clientKey} became inactive — stopping poller`);
             stopFn();
@@ -1783,11 +2225,11 @@ async function watchClients() {
           }
         }
       });
-    }
+    },
   );
 }
 
-watchClients().catch(e => {
+watchClients().catch((e) => {
   err(`watchClients fatal: ${e.message}`);
   process.exit(1);
 });
