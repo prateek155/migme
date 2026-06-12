@@ -40,6 +40,7 @@ const yatribhojan = require('./yatribhojan');
 const dibrail     = require('./dibrail');
 const spicywagon  = require('./spicywagon');
 const irctc       = require('./irctc');
+const gofood      = require('./gofood');
 const olf         = require('./olf');
 const travelkhana = require('./travelkhana');
 const generic     = require('./generic');
@@ -57,6 +58,7 @@ const vendors = [
   dibrail,
   spicywagon,
   irctc,
+  gofood,
   olf,
   travelkhana,
   generic,
@@ -92,4 +94,15 @@ const VENDOR_DOM_CONFIGS = Object.fromEntries(
     .map(v => [v.type, v.domConfig])
 );
 
-module.exports = { VENDOR_MAP, VENDOR_RULES, VENDOR_DOM_CONFIGS };
+/**
+ * VENDOR_SKIP_SUBJECTS
+ * Keyed by vendor type → array of subject strings.
+ * If an email's subject contains any of these strings, it is skipped silently.
+ */
+const VENDOR_SKIP_SUBJECTS = Object.fromEntries(
+  vendors
+    .filter(v => v.type && v.skipSubjects && v.skipSubjects.length > 0)
+    .map(v => [v.type, v.skipSubjects.map(s => s.toLowerCase())])
+);
+
+module.exports = { VENDOR_MAP, VENDOR_RULES, VENDOR_DOM_CONFIGS, VENDOR_SKIP_SUBJECTS };
