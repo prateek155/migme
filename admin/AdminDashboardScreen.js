@@ -852,11 +852,101 @@ export default function AdminDashboardScreen({ onNavigate, onLogout }) {
           </View>
         </Animated.View>
 
+        {/* ── SYSTEM HEALTH & LOAD ── */}
+        <View style={styles.divider} />
+        <SectionHeader
+          icon="speedometer-outline"
+          title="System Health & Load"
+          sub="Real-time backend monitoring"
+          color={C.purple}
+        />
+
+        {systemHealth && (
+          <View
+            style={[styles.metricsGrid, isMobile && styles.metricsGridMobile]}
+          >
+            <MetricTile
+              icon="hardware-chip-outline"
+              label="Memory Usage"
+              value={`${systemHealth.memoryUsageMB || 0}MB`}
+              color={systemHealth.memoryUsageMB > 400 ? C.danger : C.success}
+              sub={`${Math.round((systemHealth.memoryUsageMB / 500) * 100)}% of limit`}
+            />
+            <MetricTile
+              icon="speedometer-outline"
+              label="System Load"
+              value={`${Math.round(systemLoad)}%`}
+              color={
+                systemLoad > 80
+                  ? C.danger
+                  : systemLoad > 60
+                    ? C.warn
+                    : C.success
+              }
+              pct={Math.round(systemLoad)}
+            />
+            <MetricTile
+              icon="time-outline"
+              label="Uptime"
+              value={systemHealth.uptimeFormatted || "N/A"}
+              color={C.teal}
+              sub="Since last restart"
+            />
+            <MetricTile
+              icon="server-outline"
+              label="Active Pollers"
+              value={systemHealth.activePollers || 0}
+              color={C.accent}
+              sub="IMAP connections"
+            />
+            <MetricTile
+              icon="shield-checkmark-outline"
+              label="Security Events"
+              value={securityEvents}
+              color={securityEvents > 10 ? C.danger : C.success}
+              sub="Last 24 hours"
+            />
+          </View>
+        )}
+
+        {/* ── VENDOR PERFORMANCE ── */}
+        {vendorMetrics.length > 0 && (
+          <View style={{ marginTop: 20 }}>
+            <SectionHeader
+              icon="cube-outline"
+              title="Top Vendor Performance"
+              sub="Order processing metrics"
+              color={C.accent}
+            />
+            <View
+              style={[styles.metricsGrid, isMobile && styles.metricsGridMobile]}
+            >
+              {vendorMetrics.map((vendor, idx) => (
+                <MetricTile
+                  key={idx}
+                  icon="receipt-outline"
+                  label={vendor.name}
+                  value={vendor.total}
+                  color={
+                    vendor.successRate > 90
+                      ? C.success
+                      : vendor.successRate > 70
+                        ? C.warn
+                        : C.danger
+                  }
+                  pct={vendor.successRate}
+                  sub={`${vendor.success}/${vendor.total} successful`}
+                />
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* ── SYSTEM ANALYTICS HEADER ── */}
         <View style={styles.divider} />
         <SectionHeader
           icon="pulse-outline"
-          title="System Analytics"
+          title="Order Analytics"
           sub="Real-time platform intelligence"
           color={C.teal}
         />
