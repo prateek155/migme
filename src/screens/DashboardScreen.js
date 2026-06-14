@@ -19,6 +19,14 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 const TODAY_FILTER_KEY = 'dashboard_today_only';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ✅ FIX: Statuses that should be visible on the dashboard.
+// Previously only 'Active' was shown — COD orders saved with status 'Confirmed'
+// (from vendor postProcess) were silently hidden. Now both are shown.
+// 'Completed' and 'Cancelled' remain hidden as intended.
+// ─────────────────────────────────────────────────────────────────────────────
+const VISIBLE_STATUSES = ['Active', 'Confirmed', 'confirmed', 'Confirm', 'confirm'];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Pagination Bar
 // ─────────────────────────────────────────────────────────────────────────────
 const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange }) => {
@@ -99,9 +107,26 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
 
   const isCancelled = item.status === 'Cancelled';
   const isCompleted = item.status === 'Completed';
-  const badgeBg     = isCancelled ? '#fef2f2' : isCompleted ? '#f0fdf4' : '#fffbeb';
-  const badgeTxt    = isCancelled ? '#dc2626' : isCompleted ? '#16a34a' : '#b45309';
-  const badgeBorder = isCancelled ? '#fecaca' : isCompleted ? '#bbf7d0' : '#fde68a';
+  // ✅ FIX: Detect all Confirmed variants for badge colour
+  const isConfirmed = ['Confirmed', 'confirmed', 'Confirm', 'confirm'].includes(item.status);
+
+  // Status badge colours:
+  // Cancelled  → red
+  // Completed  → green
+  // Confirmed  → blue   ← NEW: distinguishable from Active at a glance
+  // Active/etc → amber  (default)
+  const badgeBg     = isCancelled ? '#fef2f2'
+                    : isCompleted ? '#f0fdf4'
+                    : isConfirmed ? '#eff6ff'
+                    : '#fffbeb';
+  const badgeTxt    = isCancelled ? '#dc2626'
+                    : isCompleted ? '#16a34a'
+                    : isConfirmed ? '#1d4ed8'
+                    : '#b45309';
+  const badgeBorder = isCancelled ? '#fecaca'
+                    : isCompleted ? '#bbf7d0'
+                    : isConfirmed ? '#bfdbfe'
+                    : '#fde68a';
 
   const codTypes    = ['COD', 'CASH', 'CASH_ON_DELIVERY'];
   const isCOD       = codTypes.includes((item.paymentType || '').toUpperCase().replace(/\s+/g, '_'));
@@ -423,15 +448,16 @@ export default function DashboardScreen({ clientId }) {
     return () => { unsubscribeOrders(); unsubscribeExecs(); };
   }, [appReady]);
 
-  // ── Derive display list (Active + optional today filter) ──
+  // ── Derive display list ──
+  // ✅ FIX: Show all VISIBLE_STATUSES (Active + Confirmed variants).
+  // Previously only 'Active' was shown — any order saved with status 'Confirmed'
+  // (e.g. COD orders from Yatri Restro vendor postProcess) was silently hidden.
   const activeOrders = orders.filter(o => {
-    if (o.status !== 'Active') return false;
+    if (!VISIBLE_STATUSES.includes(o.status)) return false;
     if (!todayOnly) return true;
 
-    // Compare deliveryDate to today
     if (!o.deliveryDate) return false;
     try {
-      // deliveryDate can be a Firestore Timestamp, ISO string, or Date-like string
       const d = o.deliveryDate?.toDate
         ? o.deliveryDate.toDate()
         : new Date(o.deliveryDate);
@@ -693,8 +719,8 @@ export default function DashboardScreen({ clientId }) {
               )}
               style={{ flex: 1 }}
               contentContainerStyle={{ paddingBottom: 0, flexGrow: 1 }}
-              showsVerticalScrollIndicator={false}    // ← hidden
-              showsHorizontalScrollIndicator={false}  // ← hidden
+              showsVerticalScrollIndicator={false}
+              showsHorizontalScrollIndicator={false}
             />
 
             <PaginationBar
@@ -764,19 +790,14 @@ const styles = StyleSheet.create({
   countDot:   { width: 7, height: 7, borderRadius: 4 },
   subHeading: { fontSize: 13, color: '#64748b', fontWeight: '500' },
 
-  // ── Today Only button ──
   todayBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 7,
     paddingHorizontal: 14, paddingVertical: 9,
     borderRadius: 8, borderWidth: 1.5, borderColor: '#e2e8f0',
     backgroundColor: '#ffffff',
   },
-  todayBtnActive: {
-    backgroundColor: '#0f172a', borderColor: '#0f172a',
-  },
-  todayBtnText: {
-    fontSize: 13, fontWeight: '700', color: '#0f172a',
-  },
+  todayBtnActive:     { backgroundColor: '#0f172a', borderColor: '#0f172a' },
+  todayBtnText:       { fontSize: 13, fontWeight: '700', color: '#0f172a' },
   todayBtnTextActive: { color: '#ffffff' },
   todayActiveDot: {
     width: 7, height: 7, borderRadius: 4,
@@ -800,8 +821,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, alignItems: 'center', backgroundColor: 'white',
   },
   tableRowExpanded: { backgroundColor: '#f8fafc' },
-  cell: { fontSize: 13, color: '#334155', fontWeight: '700' },
-  badge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, borderWidth: 1, alignSelf: 'flex-start' },
+  cell:      { fontSize: 13, color: '#334155', fontWeight: '700' },
+  badge:     { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, borderWidth: 1, alignSelf: 'flex-start' },
   paymentTag: {
     fontSize: 10, fontWeight: '700', borderWidth: 1, borderRadius: 4,
     paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start', letterSpacing: 0.5,
@@ -820,7 +841,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f172a', justifyContent: 'center',
     alignItems: 'center', borderWidth: 1.5, borderColor: '#fff',
   },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
+  emptyState:     { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
   emptyStateText: { fontSize: 14, color: '#94a3b8' },
 
   expandedContent: {
@@ -876,7 +897,7 @@ const styles = StyleSheet.create({
   atcLabel: { color: '#94a3b8', fontWeight: '700', fontSize: 10, letterSpacing: 0.8 },
   atcValue: { color: 'white', fontWeight: '800', fontSize: 15 },
 
-  dropdownBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.15)' },
+  dropdownBackdrop:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.15)' },
   dropdownContainer: {
     position: 'absolute', backgroundColor: 'white', borderRadius: 8,
     borderWidth: 1, borderColor: '#e2e8f0', width: 210, paddingVertical: 4,
@@ -895,7 +916,6 @@ const styles = StyleSheet.create({
   },
   execName: { fontSize: 14, fontWeight: '600', color: '#0f172a' },
 
-  // ── Pagination ──
   paginationBar: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'flex-end', gap: 20,
