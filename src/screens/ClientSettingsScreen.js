@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  Alert, ActivityIndicator, ScrollView, Platform, Dimensions
+  Alert, ActivityIndicator, ScrollView, Platform, Dimensions, Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
@@ -14,6 +14,10 @@ const SOUND_OPTIONS = [
   { name: 'Digital Alert', icon: 'pulse-outline', url: 'https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3' },
   { name: 'Notification Tone', icon: 'volume-medium-outline', url: 'https://assets.mixkit.co/active_storage/sfx/2872/2872-preview.mp3' },
 ];
+
+// Build a QR code image URL from Google Charts API (no extra dependency needed)
+const getQRUrl = (text) =>
+  `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(text)}&color=0f172a&bgcolor=ffffff&qzone=2`;
 
 function useScreenWidth() {
   const [width, setWidth] = useState(Dimensions.get('window').width);
@@ -28,8 +32,13 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingPwd, setSavingPwd] = useState(false);
-  const [paymentId, setPaymentId] = useState('');
 
+  // Payment state
+  const [paymentId, setPaymentId] = useState('');
+  const [savedPaymentId, setSavedPaymentId] = useState(''); // what's committed in DB
+  const [editingPayment, setEditingPayment] = useState(false);
+
+  // Password state
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [confirmPwd, setConfirmPwd] = useState('');
@@ -38,6 +47,7 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
   const [showNewPwd, setShowNewPwd] = useState(false);
   const [showConfirmPwd, setShowConfirmPwd] = useState(false);
 
+  // Sound state
   const [selectedSound, setSelectedSound] = useState(SOUND_OPTIONS[0].url);
   const [playingSound, setPlayingSound] = useState(null);
 
@@ -52,7 +62,10 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
         if (snap.exists()) {
           const data = snap.data();
           setStoredPassword(data.password || '');
-          setPaymentId(data.paymentId || '');
+          const pid = data.paymentId || '';
+          setPaymentId(pid);
+          setSavedPaymentId(pid);
+          setEditingPayment(!pid); // auto-open editor if no ID yet
           setSelectedSound(data.alertSound || SOUND_OPTIONS[0].url);
         }
       } catch (e) {
@@ -62,6 +75,7 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
     })();
   }, [clientId]);
 
+  /* ── Password ── */
   const handleChangePassword = async () => {
     if (!currentPwd || !newPwd || !confirmPwd) {
       Alert.alert('Missing Fields', 'Please fill in all password fields');
@@ -91,17 +105,59 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
     setSavingPwd(false);
   };
 
+  /* ── Payment ID save / update ── */
   const handleSavePaymentId = async () => {
+    const trimmed = paymentId.trim();
+    if (!trimmed) {
+      Alert.alert('Empty ID', 'Please enter a UPI ID before saving');
+      return;
+    }
     setSaving(true);
     try {
-      await updateDoc(doc(db, 'clients', clientId), { paymentId: paymentId.trim() });
-      Alert.alert('✓ Saved', 'Payment ID saved. It will appear as a QR code on printed bills.');
+      await updateDoc(doc(db, 'clients', clientId), { paymentId: trimmed });
+      setSavedPaymentId(trimmed);
+      setPaymentId(trimmed);
+      setEditingPayment(false);
+      Alert.alert('✓ Saved', 'Payment ID saved. QR code is now visible below.');
     } catch (e) {
       Alert.alert('Error', e.message);
     }
     setSaving(false);
   };
 
+  /* ── Payment ID remove ── */
+  const handleRemovePaymentId = () => {
+    Alert.alert(
+      'Remove Payment ID',
+      'This will delete your UPI ID and QR code from bills. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove', style: 'destructive',
+          onPress: async () => {
+            setSaving(true);
+            try {
+              await updateDoc(doc(db, 'clients', clientId), { paymentId: '' });
+              setSavedPaymentId('');
+              setPaymentId('');
+              setEditingPayment(true);
+            } catch (e) {
+              Alert.alert('Error', e.message);
+            }
+            setSaving(false);
+          }
+        }
+      ]
+    );
+  };
+
+  /* ── Cancel edit ── */
+  const handleCancelEdit = () => {
+    setPaymentId(savedPaymentId);
+    setEditingPayment(false);
+  };
+
+  /* ── Sound ── */
   const handleSoundSelect = async (opt) => {
     setSelectedSound(opt.url);
     setPlayingSound(opt.url);
@@ -131,6 +187,120 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
       </View>
     );
   }
+
+  /* ── QR Preview Section ── */
+  const QRSection = () => (
+    <View style={styles.qrWrapper}>
+      {/* UPI badge */}
+      <View style={styles.qrBadgeRow}>
+        <View style={styles.qrBadge}>
+          <Ionicons name="flash" size={11} color="#16a34a" />
+          <Text style={styles.qrBadgeText}>UPI</Text>
+        </View>
+        <Text style={styles.qrLabel}>Scan to Pay</Text>
+      </View>
+
+      {/* QR image */}
+      <View style={styles.qrImageWrap}>
+        <Image
+          source={{ uri: getQRUrl(savedPaymentId) }}
+          style={styles.qrImage}
+          resizeMode="contain"
+        />
+      </View>
+
+      {/* UPI ID */}
+      <View style={styles.qrUpiRow}>
+        <Ionicons name="wallet-outline" size={13} color="#64748b" />
+        <Text style={styles.qrUpiText} numberOfLines={1}>{savedPaymentId}</Text>
+      </View>
+
+      <Text style={styles.qrNote}>
+        This QR will appear on printed bills for instant customer payments.
+      </Text>
+
+      {/* Action buttons */}
+      <View style={styles.qrActions}>
+        <TouchableOpacity
+          style={styles.qrEditBtn}
+          onPress={() => {
+            setPaymentId(savedPaymentId);
+            setEditingPayment(true);
+          }}
+        >
+          <Ionicons name="pencil-outline" size={13} color="#6366f1" />
+          <Text style={styles.qrEditText}>Update ID</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.qrRemoveBtn}
+          onPress={handleRemovePaymentId}
+          disabled={saving}
+        >
+          {saving
+            ? <ActivityIndicator size="small" color="#ef4444" />
+            : <>
+                <Ionicons name="trash-outline" size={13} color="#ef4444" />
+                <Text style={styles.qrRemoveText}>Remove</Text>
+              </>
+          }
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  /* ── Payment Editor ── */
+  const PaymentEditor = () => (
+    <>
+      <Text style={styles.fieldLabel}>UPI ID / Payment Address</Text>
+      <View style={styles.inputWrapper}>
+        <Ionicons name="wallet-outline" size={15} color="#94a3b8" style={styles.inputIcon} />
+        <TextInput
+          style={[styles.fieldInput, { paddingLeft: 36 }]}
+          placeholder="e.g. name@upi or 98765@paytm"
+          placeholderTextColor="#c7d0dc"
+          value={paymentId}
+          onChangeText={setPaymentId}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+        />
+      </View>
+
+      <View style={styles.hintBox}>
+        <Ionicons name="information-circle-outline" size={14} color="#16a34a" style={{ marginTop: 1 }} />
+        <Text style={styles.hintText}>
+          This ID will appear as a scannable QR code on printed bills, so customers can pay instantly.
+        </Text>
+      </View>
+
+      <View style={styles.paymentBtnRow}>
+        {savedPaymentId ? (
+          <TouchableOpacity
+            style={[styles.btn, styles.btnOutline, { flex: 1 }]}
+            onPress={handleCancelEdit}
+          >
+            <Ionicons name="close-outline" size={15} color="#64748b" style={{ marginRight: 4 }} />
+            <Text style={styles.btnOutlineText}>Cancel</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        <TouchableOpacity
+          style={[styles.btn, styles.btnGreen, { flex: savedPaymentId ? 2 : 1 }, saving && styles.btnDisabled]}
+          onPress={handleSavePaymentId}
+          disabled={saving}
+        >
+          {saving
+            ? <ActivityIndicator size="small" color="#fff" />
+            : <>
+                <Ionicons name="save-outline" size={15} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.btnText}>{savedPaymentId ? 'Update Payment ID' : 'Save Payment ID'}</Text>
+              </>
+          }
+        </TouchableOpacity>
+      </View>
+    </>
+  );
 
   return (
     <View style={styles.container}>
@@ -262,43 +432,11 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
 
             <View style={styles.divider} />
 
-            <Text style={styles.fieldLabel}>UPI ID / Payment Address</Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons name="wallet-outline" size={15} color="#94a3b8" style={styles.inputIcon} />
-              <TextInput
-                style={[styles.fieldInput, { paddingLeft: 36 }]}
-                placeholder="e.g. name@upi or 98765@paytm"
-                placeholderTextColor="#c7d0dc"
-                value={paymentId}
-                onChangeText={setPaymentId}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-              />
-            </View>
-
-            <View style={styles.hintBox}>
-              <Ionicons name="information-circle-outline" size={14} color="#16a34a" style={{ marginTop: 1 }} />
-              <Text style={styles.hintText}>
-                This ID will appear as a scannable QR code on printed bills, so customers can pay instantly.
-              </Text>
-            </View>
-
-            <View style={styles.spacer} />
-
-            <TouchableOpacity
-              style={[styles.btn, styles.btnGreen, saving && styles.btnDisabled]}
-              onPress={handleSavePaymentId}
-              disabled={saving}
-            >
-              {saving
-                ? <ActivityIndicator size="small" color="#fff" />
-                : <>
-                    <Ionicons name="save-outline" size={15} color="#fff" style={{ marginRight: 6 }} />
-                    <Text style={styles.btnText}>Save Payment ID</Text>
-                  </>
-              }
-            </TouchableOpacity>
+            {/* Show QR preview if saved & not editing, otherwise show editor */}
+            {savedPaymentId && !editingPayment
+              ? <QRSection />
+              : <PaymentEditor />
+            }
           </View>
 
         </View>
@@ -408,14 +546,80 @@ const styles = StyleSheet.create({
   },
   hintText: { fontSize: 11, color: '#15803d', lineHeight: 16, flex: 1 },
 
-  spacer: { flex: 1 },
+  paymentBtnRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
 
-  btn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 8, marginTop: 4 },
-  btnPrimary: { backgroundColor: '#6366f1' },
+  btn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 8 },
+  btnPrimary: { backgroundColor: '#6366f1', marginTop: 4 },
   btnGreen: { backgroundColor: '#16a34a' },
+  btnOutline: {
+    backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#e2e8f0',
+  },
   btnDisabled: { opacity: 0.55 },
   btnText: { color: '#fff', fontWeight: '700', fontSize: 13, letterSpacing: 0.3 },
+  btnOutlineText: { color: '#64748b', fontWeight: '600', fontSize: 13 },
 
+  // ── QR Section ──
+  qrWrapper: {
+    alignItems: 'center',
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  qrBadgeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14,
+    alignSelf: 'stretch', justifyContent: 'center',
+  },
+  qrBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#dcfce7', borderRadius: 20,
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: '#bbf7d0',
+  },
+  qrBadgeText: { fontSize: 10, fontWeight: '700', color: '#15803d', letterSpacing: 0.5 },
+  qrLabel: { fontSize: 13, fontWeight: '600', color: '#0f172a' },
+
+  qrImageWrap: {
+    padding: 10,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
+    marginBottom: 14,
+  },
+  qrImage: { width: 160, height: 160 },
+
+  qrUpiRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#f8fafc', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0',
+    paddingHorizontal: 12, paddingVertical: 8, marginBottom: 10,
+    alignSelf: 'stretch',
+  },
+  qrUpiText: { fontSize: 12, color: '#475569', fontWeight: '600', flex: 1 },
+
+  qrNote: {
+    fontSize: 11, color: '#94a3b8', textAlign: 'center',
+    lineHeight: 16, marginBottom: 16, paddingHorizontal: 8,
+  },
+
+  qrActions: { flexDirection: 'row', gap: 10, alignSelf: 'stretch' },
+  qrEditBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 5, paddingVertical: 10, borderRadius: 8,
+    backgroundColor: '#ede9fe', borderWidth: 1, borderColor: '#c4b5fd',
+  },
+  qrEditText: { fontSize: 12, fontWeight: '700', color: '#6366f1' },
+  qrRemoveBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 5, paddingVertical: 10, borderRadius: 8,
+    backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca',
+  },
+  qrRemoveText: { fontSize: 12, fontWeight: '700', color: '#ef4444' },
+
+  // ── Sound ──
   soundGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   soundGridWide: {},
 
