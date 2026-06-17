@@ -779,8 +779,14 @@ const {
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
-// eslint-disable-next-line no-unused-vars
-async function markEmailAsRead(_connection, _uid) {}
+async function markEmailAsRead(connection, uid) {
+  try {
+    await connection.addFlags(uid, ["\\Seen"]);
+    log(`   ✉️  UID ${uid} marked as read`);
+  } catch (e) {
+    warn(`   ⚠️  Could not mark UID ${uid} as read: ${e.message}`);
+  }
+}
 
 function getMissingFields(orderData) {
   const missing = [];
@@ -1580,12 +1586,6 @@ function buildChangePayload(existingOrder, updateResult) {
 //   variable inside runPollingCycle — they become dead code.
 //   Optionally fill in markEmailAsRead() to mark emails as read after saving.
 // ═══════════════════════════════════════════════════════════════════════════
-const FETCH_SINCE_FIXED = new Date("2026-06-13T19:30:00.000Z");
-
-function getFetchSince() {
-  const rollingWindow = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-  return rollingWindow > FETCH_SINCE_FIXED ? rollingWindow : FETCH_SINCE_FIXED;
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EMAIL PROCESSOR
@@ -1645,7 +1645,7 @@ async function processEmail(
 
     // Guard 4 — date filter
     const emailDate = parsed.date ? new Date(parsed.date) : new Date();
-    const FETCH_SINCE = getFetchSince();
+    const FETCH_SINCE = new Date("2026-06-13T19:30:00.000Z");
     if (emailDate < FETCH_SINCE) {
       // Guard 4
       sessionUIDCache.add(uid);
@@ -1934,6 +1934,7 @@ async function processEmail(
           Object.keys(changes).length > 0 ? "update_applied" : "duplicate",
           clientId,
         );
+        await markEmailAsRead(connection, uid);
 
         // ── NEW ORDER → validate then save ────────────────────────────────
       } else {
@@ -1977,6 +1978,7 @@ async function processEmail(
 
         sessionUIDCache.add(uid);
         await recordProcessedEmail(uidStr, finalOrderNo, "success", clientId);
+        await markEmailAsRead(connection, uid);
       }
     } finally {
       releaseLock(lockKey);
@@ -2040,10 +2042,8 @@ async function pollClientInbox(
         return;
       }
 
-      const FETCH_SINCE = getFetchSince();
-
       const messages = await Promise.race([
-        connection.search([["SINCE", FETCH_SINCE]], {
+        connection.search(["UNSEEN"], {
           bodies: ["HEADER.FIELDS (SUBJECT)"],
           markSeen: false,
         }),
