@@ -1599,6 +1599,7 @@ async function processEmail(
   tag,
   blockedSenders,
   sessionUIDCache,
+  clientCreatedAt,
 ) {
   const uid = item.attributes.uid;
   const uidStr = uid.toString();
@@ -1624,6 +1625,7 @@ async function processEmail(
           log(`${tag} UID ${uidStr} already in DB (${prevStatus}) — skipping`);
           emailSet.add(uidStr);
           sessionUIDCache.add(uid);
+          await markEmailAsRead(connection, uid);
           return;
         }
         log(`${tag} UID ${uidStr} was incomplete — retrying parse`);
@@ -1643,12 +1645,13 @@ async function processEmail(
       fullMsg[0].parts.find((p) => p.which === "").body,
     );
 
-    // Guard 4 — date filter
+    // Guard 4 — date filter: skip emails older than when this client was added
     const emailDate = parsed.date ? new Date(parsed.date) : new Date();
-    const FETCH_SINCE = new Date("2026-06-13T19:30:00.000Z");
+    const FETCH_SINCE = new Date(clientCreatedAt || Date.now());
     if (emailDate < FETCH_SINCE) {
-      // Guard 4
+      // Guard 4 — old email, mark as read so it never appears again
       sessionUIDCache.add(uid);
+      await markEmailAsRead(connection, uid);
       return;
     }
 
@@ -1663,6 +1666,7 @@ async function processEmail(
       log(`${tag} Blocked sender: ${fromAddress}`);
       sessionUIDCache.add(uid);
       await recordProcessedEmail(uidStr, "", "blocked_sender", clientId);
+      await markEmailAsRead(connection, uid);
       return;
     }
 
@@ -1678,6 +1682,7 @@ async function processEmail(
     if (!subjectMatches && !vendorFromSender) {
       // Guard 5
       sessionUIDCache.add(uid);
+      await markEmailAsRead(connection, uid);
       return;
     }
     if (!subjectMatches && vendorFromSender) {
@@ -1712,6 +1717,7 @@ async function processEmail(
         log(`${tag} Skipping fake email for ${detectedName}: "${subject}"`);
         sessionUIDCache.add(uid);
         await recordProcessedEmail(uidStr, "", "skipped_fake", clientId);
+        await markEmailAsRead(connection, uid);
         return;
       }
     }
@@ -1996,6 +2002,7 @@ async function pollClientInbox(
   emailAddr,
   appPassword,
   clientBusinessName,
+  clientCreatedAt,
 ) {
   const tag = `[${clientBusinessName}]`;
   log(`${tag} Starting IMAP polling for ${emailAddr}`);
@@ -2077,6 +2084,7 @@ async function pollClientInbox(
               tag,
               blockedSenders,
               sessionUIDCache,
+              clientCreatedAt,
             ),
           ),
         );
@@ -2192,6 +2200,7 @@ async function watchClients() {
             data.email,
             plainPassword,
             data.businessName,
+            data.createdAt,
           );
           activePolls.set(clientKey, stopFn);
           globalStopFns.add(stopFn);
