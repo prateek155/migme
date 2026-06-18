@@ -8,11 +8,12 @@ import { signOut } from 'firebase/auth';
 import { auth } from './src/firebaseConfig';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import AdminLoginScreen from './admin/AdminLoginScreen';
-import AdminDashboardScreen from './admin/AdminDashboardScreen';
-import AddClientScreen from './admin/AddClientScreen';
-import ClientDetailScreen from './admin/ClientDetailScreen';
-import DataManagementScreen from './admin/DataManagementScreen';
+import AdminLoginScreen        from './admin/AdminLoginScreen';
+import AdminDashboardScreen    from './admin/AdminDashboardScreen';
+import AddClientScreen         from './admin/AddClientScreen';
+import ClientDetailScreen      from './admin/ClientDetailScreen';
+import DataManagementScreen    from './admin/DataManagementScreen';
+import ClientManagementScreen  from './admin/ClientManagementScreen'; // ← NEW
 
 // ─── Sidebar layout constants ─────────────────────────────────────────────────
 const SIDEBAR_EXPANDED  = 240;
@@ -21,22 +22,18 @@ const MOBILE_BP         = 768;
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [user, setUser]                       = useState(null);
-  const [loading, setLoading]                 = useState(true);
-  const [adminScreen, setAdminScreen]         = useState(() => localStorage.getItem('admin_screen') || 'Dashboard');
-  const [adminParams, setAdminParams]         = useState(null);
+  const [user, setUser]                           = useState(null);
+  const [loading, setLoading]                     = useState(true);
+  const [adminScreen, setAdminScreen]             = useState(() => localStorage.getItem('admin_screen') || 'Dashboard');
+  const [adminParams, setAdminParams]             = useState(null);
 
-  // Sidebar collapsed state (desktop only)
-  const [collapsed, setCollapsed]             = useState(() => localStorage.getItem('sidebar_collapsed') === 'true');
-  // Mobile sidebar open state
+  const [collapsed, setCollapsed]                 = useState(() => localStorage.getItem('sidebar_collapsed') === 'true');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const { width: screenWidth } = useWindowDimensions();
   const isMobile = screenWidth < MOBILE_BP;
 
-  // Animated sidebar width
   const sidebarAnim = useRef(new Animated.Value(SIDEBAR_EXPANDED)).current;
-  // Animated overlay opacity for mobile
   const overlayAnim = useRef(new Animated.Value(0)).current;
 
   // ── Animate sidebar width on collapse/expand (desktop) ──
@@ -50,11 +47,8 @@ export default function App() {
   }, [collapsed, isMobile]);
 
   // ── Animate mobile sidebar + overlay ──
-  // On mobile: collapsed = SIDEBAR_COLLAPSED (56px icon strip always visible)
-  // On mobile open: SIDEBAR_EXPANDED (240px) floats over content with overlay
   useEffect(() => {
     if (!isMobile) {
-      // Reset mobile state when switching back to desktop
       setMobileSidebarOpen(false);
       overlayAnim.setValue(0);
       sidebarAnim.setValue(collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED);
@@ -74,7 +68,6 @@ export default function App() {
     ]).start();
   }, [mobileSidebarOpen, isMobile]);
 
-  // Label / logo text opacity — fade out when collapsed (desktop) or mobile closed
   const labelOpacity = sidebarAnim.interpolate({
     inputRange: [SIDEBAR_COLLAPSED, SIDEBAR_EXPANDED],
     outputRange: [0, 1],
@@ -91,14 +84,12 @@ export default function App() {
 
   const closeMobile = () => setMobileSidebarOpen(false);
 
-  // ─── Session restore ─────────────────────────────────────────────────────
+  // ─── Session restore ──────────────────────────────────────────────────────
   useEffect(() => {
     const loadSession = async () => {
       try {
         const userData = await AsyncStorage.getItem('migme_user');
-        if (userData) {
-          setUser(JSON.parse(userData));
-        }
+        if (userData) setUser(JSON.parse(userData));
       } catch (e) { console.error('App.js loadSession error:', e); }
       setLoading(false);
     };
@@ -130,7 +121,7 @@ export default function App() {
     );
   }
 
-  // ─── No user: admin login ────────────────────────────────────────────────
+  // ─── No user: admin login ─────────────────────────────────────────────────
   if (!user) {
     return (
       <View style={{ flex: 1 }}>
@@ -140,17 +131,10 @@ export default function App() {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // ─── Shared sidebar shell ─────────────────────────────────────────────────
-  // On mobile:
-  //   - Sidebar is always inline (never hides) at SIDEBAR_COLLAPSED width (56px)
-  //   - When opened it animates to SIDEBAR_EXPANDED and floats (absolute) over content
-  //   - A dim overlay covers the content; tapping it closes the sidebar
-  // On desktop:
-  //   - Sidebar is always inline, animates between collapsed/expanded
+  // ─── Sidebar shell ────────────────────────────────────────────────────────
   // ═══════════════════════════════════════════════════════════════════════════
   const SidebarShell = ({ bgColor, borderColor, children }) => (
     <>
-      {/* Mobile dim overlay — rendered only when sidebar is open */}
       {isMobile && mobileSidebarOpen && (
         <Animated.View
           pointerEvents="auto"
@@ -169,8 +153,6 @@ export default function App() {
             width: sidebarAnim,
             backgroundColor: bgColor,
             borderRightColor: borderColor,
-            // On mobile when OPEN: float absolute over content
-            // On mobile when CLOSED: stay inline as 56px icon strip
             ...(isMobile && mobileSidebarOpen ? {
               position: 'absolute',
               left: 0,
@@ -194,98 +176,182 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════════════════════
   // ─── ADMIN VIEW ───────────────────────────────────────────────────────────
   // ═══════════════════════════════════════════════════════════════════════════
-    const renderAdminContent = () => {
-      switch (adminScreen) {
-        case 'Dashboard':    return <AdminDashboardScreen onNavigate={(s, p) => { setAdminScreen(s); localStorage.setItem('admin_screen', s); setAdminParams(p); }} onLogout={handleLogout} />;
-        case 'AddClient':    return <AddClientScreen onBack={() => { setAdminScreen('Dashboard'); localStorage.setItem('admin_screen', 'Dashboard'); }} />;
-        case 'ClientDetail': return <ClientDetailScreen client={adminParams?.client} onBack={() => { setAdminScreen('Dashboard'); localStorage.setItem('admin_screen', 'Dashboard'); }} />;
-        case 'DataManagement': return <DataManagementScreen onBack={() => { setAdminScreen('Dashboard'); localStorage.setItem('admin_screen', 'Dashboard'); }} />;
-        default:             return <AdminDashboardScreen onNavigate={s => { setAdminScreen(s); localStorage.setItem('admin_screen', s); }} onLogout={handleLogout} />;
-      }
-    };
+  const navigate = (screen, params) => {
+    setAdminScreen(screen);
+    localStorage.setItem('admin_screen', screen);
+    setAdminParams(params);
+  };
 
-    const AdminNavItem = ({ icon, label, screen }) => {
-      const isActive = adminScreen === screen;
-      return (
-        <TouchableOpacity
-          style={[styles.navItem, isActive && styles.navItemActiveWhite]}
-          onPress={() => { setAdminScreen(screen); localStorage.setItem('admin_screen', screen); closeMobile(); }}
-          activeOpacity={0.75}
-        >
-          {isActive && <View style={[styles.activePill, { backgroundColor: '#4ade80' }]} />}
-          <Ionicons name={icon} size={20} color={isActive ? '#ffffff' : 'rgba(255,255,255,0.7)'} />
-          <Animated.Text
-            numberOfLines={1}
-            style={[styles.navLabel, { color: '#ffffff', fontWeight: isActive ? '700' : '600', opacity: labelOpacity }]}
-          >
-            {label}
-          </Animated.Text>
-        </TouchableOpacity>
-      );
-    };
+  const renderAdminContent = () => {
+    switch (adminScreen) {
+      case 'Dashboard':
+        return (
+          <AdminDashboardScreen
+            onNavigate={(s, p) => navigate(s, p)}
+            onLogout={handleLogout}
+          />
+        );
+      case 'AddClient':
+        return (
+          <AddClientScreen
+            onBack={() => navigate('Dashboard')}
+          />
+        );
+      case 'ClientDetail':
+        return (
+          <ClientDetailScreen
+            client={adminParams?.client}
+            onBack={() => navigate('Dashboard')}
+          />
+        );
+      case 'DataManagement':
+        return (
+          <DataManagementScreen
+            onBack={() => navigate('Dashboard')}
+          />
+        );
+      // ── NEW: Client Management screen ──
+      case 'ClientManagement':
+        return (
+          <ClientManagementScreen
+            onBack={() => navigate('Dashboard')}
+          />
+        );
+      default:
+        return (
+          <AdminDashboardScreen
+            onNavigate={(s, p) => navigate(s, p)}
+            onLogout={handleLogout}
+          />
+        );
+    }
+  };
 
+  const AdminNavItem = ({ icon, label, screen }) => {
+    const isActive = adminScreen === screen;
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.layout}>
-          <SidebarShell bgColor="#0f766e" borderColor="#e2e8f0">
-            {/* Header — tap logo icon to toggle sidebar */}
-            <View style={styles.sidebarHeader}>
-              <TouchableOpacity style={styles.logoIconBox} onPress={handleToggle} activeOpacity={0.8}>
-                <Ionicons name="shield-checkmark" size={18} color="white" />
-              </TouchableOpacity>
-              <Animated.View style={{ opacity: labelOpacity, flex: 1, overflow: 'hidden' }}>
-                <Text numberOfLines={1} style={styles.logoText}>MIGME</Text>
-                <Text numberOfLines={1} style={styles.clientSubName}>Admin Panel</Text>
-              </Animated.View>
-            </View>
+      <TouchableOpacity
+        style={[styles.navItem, isActive && styles.navItemActiveWhite]}
+        onPress={() => { navigate(screen); closeMobile(); }}
+        activeOpacity={0.75}
+      >
+        {isActive && <View style={[styles.activePill, { backgroundColor: '#4ade80' }]} />}
+        <Ionicons name={icon} size={20} color={isActive ? '#ffffff' : 'rgba(255,255,255,0.7)'} />
+        <Animated.Text
+          numberOfLines={1}
+          style={[
+            styles.navLabel,
+            { color: '#ffffff', fontWeight: isActive ? '700' : '600', opacity: labelOpacity },
+          ]}
+        >
+          {label}
+        </Animated.Text>
+      </TouchableOpacity>
+    );
+  };
 
-            {/* Nav */}
-            <View style={{ flex: 1, paddingTop: 8 }}>
-              <Animated.Text style={[styles.sectionHeading, { opacity: labelOpacity }]}>
-                MANAGEMENT
-              </Animated.Text>
-              <AdminNavItem icon="people-outline"     label="Clients"        screen="Dashboard" />
-              <AdminNavItem icon="add-circle-outline" label="Add Client"     screen="AddClient" />
-              <AdminNavItem icon="server-outline"     label="Data Mgmt"      screen="DataManagement" />
-            </View>
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.layout}>
+        <SidebarShell bgColor="#0f766e" borderColor="#e2e8f0">
 
-            {/* Footer */}
-            <View style={styles.sidebarFooter}>
-              {/* Collapse toggle — desktop only */}
-              {!isMobile && (
-                <TouchableOpacity style={styles.collapseBtn} onPress={() => setCollapsed(v => !v)} activeOpacity={0.7}>
-                  <Ionicons
-                    name={collapsed ? 'chevron-forward-outline' : 'chevron-back-outline'}
-                    size={16}
-                    color="#94a3b8"
-                  />
-                  <Animated.Text numberOfLines={1} style={[styles.collapseBtnText, { opacity: labelOpacity }]}>
-                    Collapse
-                  </Animated.Text>
-                </TouchableOpacity>
-              )}
+          {/* Header */}
+          <View style={styles.sidebarHeader}>
+            <TouchableOpacity style={styles.logoIconBox} onPress={handleToggle} activeOpacity={0.8}>
+              <Ionicons name="shield-checkmark" size={18} color="white" />
+            </TouchableOpacity>
+            <Animated.View style={{ opacity: labelOpacity, flex: 1, overflow: 'hidden' }}>
+              <Text numberOfLines={1} style={styles.logoText}>MIGME</Text>
+              <Text numberOfLines={1} style={styles.clientSubName}>Admin Panel</Text>
+            </Animated.View>
+          </View>
 
+          {/* Nav */}
+          <View style={{ flex: 1, paddingTop: 8 }}>
+
+            {/* ── Management section ── */}
+            <Animated.Text style={[styles.sectionHeading, { opacity: labelOpacity }]}>
+              MANAGEMENT
+            </Animated.Text>
+
+            <AdminNavItem
+              icon="people-outline"
+              label="Clients"
+              screen="Dashboard"
+            />
+            <AdminNavItem
+              icon="add-circle-outline"
+              label="Add Client"
+              screen="AddClient"
+            />
+
+            {/* ── NEW: Client Management ── */}
+            <AdminNavItem
+              icon="briefcase-outline"
+              label="Client Management"
+              screen="ClientManagement"
+            />
+
+            {/* ── System section ── */}
+            <Animated.Text style={[styles.sectionHeading, { opacity: labelOpacity, marginTop: 16 }]}>
+              SYSTEM
+            </Animated.Text>
+
+            <AdminNavItem
+              icon="server-outline"
+              label="Data Mgmt"
+              screen="DataManagement"
+            />
+
+          </View>
+
+          {/* Footer */}
+          <View style={styles.sidebarFooter}>
+            {!isMobile && (
               <TouchableOpacity
-                style={styles.navItem}
-                onPress={() => { handleLogout(); closeMobile(); }}
-                activeOpacity={0.75}
+                style={styles.collapseBtn}
+                onPress={() => setCollapsed(v => !v)}
+                activeOpacity={0.7}
               >
-                <Ionicons name="log-out-outline" size={26} color="#ef4444" />
-                <Animated.Text numberOfLines={1} style={[styles.navLabel, { color: '#ef4444', opacity: labelOpacity }]}>
-                  Log Out
+                <Ionicons
+                  name={collapsed ? 'chevron-forward-outline' : 'chevron-back-outline'}
+                  size={16}
+                  color="#94a3b8"
+                />
+                <Animated.Text
+                  numberOfLines={1}
+                  style={[styles.collapseBtnText, { opacity: labelOpacity }]}
+                >
+                  Collapse
                 </Animated.Text>
               </TouchableOpacity>
-            </View>
-          </SidebarShell>
+            )}
 
-          {/* Main content — no topBar hamburger on mobile since icon strip is always visible */}
-          <View style={styles.mainContent}>
-            {renderAdminContent()}
+            <TouchableOpacity
+              style={styles.navItem}
+              onPress={() => { handleLogout(); closeMobile(); }}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="log-out-outline" size={26} color="#ef4444" />
+              <Animated.Text
+                numberOfLines={1}
+                style={[styles.navLabel, { color: '#ef4444', opacity: labelOpacity }]}
+              >
+                Log Out
+              </Animated.Text>
+            </TouchableOpacity>
           </View>
+
+        </SidebarShell>
+
+        {/* Main content */}
+        <View style={styles.mainContent}>
+          {renderAdminContent()}
         </View>
-      </SafeAreaView>
-    );
-  }
+      </View>
+    </SafeAreaView>
+  );
+}
 
 const styles = StyleSheet.create({
   container: {
@@ -300,7 +366,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
-  // ── Sidebar ──────────────────────────────────────────────────────────────
+  // ── Sidebar ───────────────────────────────────────────────────────────────
   sidebar: {
     flexDirection: 'column',
     borderRightWidth: 1,
@@ -339,7 +405,7 @@ const styles = StyleSheet.create({
   sectionHeading: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#ffffff',
+    color: 'rgba(255,255,255,0.55)',
     letterSpacing: 1.1,
     paddingHorizontal: 16,
     paddingTop: 12,
@@ -396,7 +462,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // ── Main content area ─────────────────────────────────────────────────────
+  // ── Main content ──────────────────────────────────────────────────────────
   mainContent: {
     flex: 1,
     backgroundColor: '#f8fafc',
@@ -437,7 +503,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  roleSelection: { flex: 1 },
+  roleSelection:    { flex: 1 },
   adminSwitchBtn: {
     position: 'absolute',
     bottom: 40,
