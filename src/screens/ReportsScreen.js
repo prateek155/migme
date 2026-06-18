@@ -372,13 +372,15 @@ function PieChart({ data, size, title }) {
 
   if (!data || data.length === 0) return null;
 
-  const total  = data.reduce((s, d) => s + d.population, 0);
-  const SW     = size * 2.7;
-  const SH     = size * 1.65;
+  const total   = data.reduce((s, d) => s + d.population, 0);
+  // Keep SVG canvas tight — pie takes up center, labels get fixed side padding
+  const LABEL_PAD = 90; // fixed px each side for leader-line labels
+  const SW     = size + LABEL_PAD * 2;   // e.g. size=140 → SW=320
+  const SH     = size * 1.1 + 20;        // just enough height, not 1.65×
   const cx     = SW / 2;
   const cy     = SH / 2;
-  const R      = size * 0.36;
-  const SMALL_R = size * 0.65;
+  const R      = size * 0.38;            // pie radius relative to size
+  const SMALL_R = R * 0.65;             // dot position inside small slices
 
   if (data.length === 1) {
     return (
@@ -386,8 +388,8 @@ function PieChart({ data, size, title }) {
         {title && <Text style={styles.pieTitle}>{title}</Text>}
         <Svg width={SW} height={SH} viewBox={`0 0 ${SW} ${SH}`}>
           <Circle cx={cx} cy={cy} r={R} fill={data[0].color} />
-          <Line x1={cx} y1={cy + R} x2={cx} y2={cy + R + 22} stroke={data[0].color} strokeWidth="1.5" />
-          <SvgText x={cx} y={cy + R + 37} fontSize="13" fontWeight="700" fill="#1e293b" textAnchor="middle">
+          <Line x1={cx} y1={cy + R} x2={cx} y2={cy + R + 16} stroke={data[0].color} strokeWidth="1.5" />
+          <SvgText x={cx} y={cy + R + 30} fontSize="12" fontWeight="700" fill="#1e293b" textAnchor="middle">
             {data[0].name} ({data[0].population})
           </SvgText>
         </Svg>
@@ -414,24 +416,26 @@ function PieChart({ data, size, title }) {
       pct: (frac * 100).toFixed(1),
       isSmall: frac < SMALL_SLICE,
       isRight: Math.cos(mid) >= 0,
-      ax: cx + (R + 6)  * Math.cos(mid),
-      ay: cy + (R + 6)  * Math.sin(mid),
-      bx: cx + (R + 26) * Math.cos(mid),
-      by: cy + (R + 26) * Math.sin(mid),
+      ax: cx + (R + 4)  * Math.cos(mid),
+      ay: cy + (R + 4)  * Math.sin(mid),
+      bx: cx + (R + 18) * Math.cos(mid),
+      by: cy + (R + 18) * Math.sin(mid),
       dotX: cx + SMALL_R * Math.cos(mid),
       dotY: cy + SMALL_R * Math.sin(mid),
     });
     angle = end;
   });
 
-  const LPAD = 28;
+  const LPAD = 14; // shorter leader line horizontal segment
   const distributeLabels = (list, side) => {
     const sorted = list.sort((a, b) => a.by - b.by);
     const out = [];
     sorted.forEach((s, i) => {
       let ly = s.by;
-      if (i > 0 && ly - out[i - 1].ly < 28) ly = out[i - 1].ly + 28;
-      out.push({ ...s, lx: side === 'right' ? cx + R + LPAD + 16 : cx - R - LPAD - 16, ly, side });
+      if (i > 0 && ly - out[i - 1].ly < 26) ly = out[i - 1].ly + 26;
+      // anchor label text at the SVG edge minus a small margin
+      const lx = side === 'right' ? cx + R + LPAD + 10 : cx - R - LPAD - 10;
+      out.push({ ...s, lx, ly, side });
     });
     return out;
   };
@@ -728,7 +732,13 @@ export default function ReportsScreen({ clientId }) {
 
   const { width: sw } = Dimensions.get('window');
   const isMobile = sw < 600;
-  const PIE_SZ   = isMobile ? Math.min(Math.floor(sw * 0.52), 170) : Math.min(Math.floor((sw - 100) / 3.5), 240);
+  // PIE_SZ is the pie circle diameter — keep it compact so the full card fits on screen.
+  // SW (total SVG width) = PIE_SZ + 2*90 label padding. So total card width ≈ 2*(PIE_SZ+180).
+  // At sw=1400 desktop we want each pie to be ~150px → card uses ~2*(330)=660px ✓
+  // At sw=800 we want ~110px → SVG=290px each, two pies = 580px ✓
+  const PIE_SZ = isMobile
+    ? Math.min(Math.floor(sw * 0.38), 130)        // mobile: scrollable, smaller
+    : Math.min(Math.max(Math.floor((sw - 500) / 4), 100), 160); // desktop: capped 100–160
 
   const PERIOD_OPTS = ['Today','Week','Month','Custom'];
   const STATUS_OPTS = ['All','Completed','Cancelled'];
@@ -1155,12 +1165,12 @@ export default function ReportsScreen({ clientId }) {
               )}
             </View>
 
-            {/* Vendor table — horizontal scroll on mobile */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={[styles.tableCard, { minWidth: isMobile ? 600 : '100%' }]}>
+            {/* Vendor table — always horizontal scroll, fixed column widths */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={Platform.OS !== 'web'} style={{ marginBottom: 14 }}>
+              <View style={[styles.tableCard, { width: 720 }]}>
                 <View style={styles.tableHead}>
-                  {[['No',0.4],['Vendor',1.8],['Delivered',0.8],['Cancelled',0.8],['Total',1.4],['COD',1.4],['Online',1.4],['Actions',0.9]].map(([l,f]) => (
-                    <Text key={l} style={[styles.th, { flex: f }]}>{l}</Text>
+                  {[['No',36],['Vendor',140],['Delivered',74],['Cancelled',74],['Total',130],['COD',120],['Online',110],['Actions',56]].map(([l,w]) => (
+                    <Text key={l} style={[styles.th, { width: w }]}>{l}</Text>
                   ))}
                 </View>
                 {vendorSummary.length === 0 ? (
@@ -1168,14 +1178,14 @@ export default function ReportsScreen({ clientId }) {
                 ) : (
                   vendorSummary.map((v, i) => (
                     <View key={v.vendorName} style={[styles.tableRow, i%2===0 && styles.tableRowAlt]}>
-                      <Text style={[styles.td, { flex:0.4, color:'#94a3b8' }]}>{i+1}</Text>
-                      <Text style={[styles.td, { flex:1.8, fontWeight:'600', color:'#1e293b' }]}>{v.vendorName}</Text>
-                      <Text style={[styles.td, { flex:0.8, color:'#16a34a', fontWeight:'700' }]}>{v.delivered}</Text>
-                      <Text style={[styles.td, { flex:0.8, color: v.cancelled>0?'#dc2626':'#94a3b8', fontWeight:'700' }]}>{v.cancelled}</Text>
-                      <View style={{ flex:1.4 }}><Text style={styles.tdAmt}>{fmt(v.total)}</Text><Text style={styles.tdCnt}>({v.totalCount} orders)</Text></View>
-                      <View style={{ flex:1.4 }}><Text style={[styles.tdAmt,{color:'#0891b2'}]}>{fmt(v.cod)}</Text><Text style={styles.tdCnt}>({v.codCount})</Text></View>
-                      <View style={{ flex:1.4 }}><Text style={[styles.tdAmt,{color:'#7c3aed'}]}>{fmt(v.online)}</Text><Text style={styles.tdCnt}>({v.onlineCount})</Text></View>
-                      <View style={{ flex:0.9 }}>
+                      <Text style={[styles.td, { width:36, color:'#94a3b8' }]}>{i+1}</Text>
+                      <Text style={[styles.td, { width:140, fontWeight:'600', color:'#1e293b' }]} numberOfLines={2}>{v.vendorName}</Text>
+                      <Text style={[styles.td, { width:74, color:'#16a34a', fontWeight:'700' }]}>{v.delivered}</Text>
+                      <Text style={[styles.td, { width:74, color: v.cancelled>0?'#dc2626':'#94a3b8', fontWeight:'700' }]}>{v.cancelled}</Text>
+                      <View style={{ width:130 }}><Text style={styles.tdAmt}>{fmt(v.total)}</Text><Text style={styles.tdCnt}>({v.totalCount} orders)</Text></View>
+                      <View style={{ width:120 }}><Text style={[styles.tdAmt,{color:'#0891b2'}]}>{fmt(v.cod)}</Text><Text style={styles.tdCnt}>({v.codCount})</Text></View>
+                      <View style={{ width:110 }}><Text style={[styles.tdAmt,{color:'#7c3aed'}]}>{fmt(v.online)}</Text><Text style={styles.tdCnt}>({v.onlineCount})</Text></View>
+                      <View style={{ width:56, alignItems:'center' }}>
                         <TouchableOpacity style={styles.actionBtn} onPress={() => setVendor(v.vendorName)} activeOpacity={0.8}>
                           <Ionicons name="chevron-forward" size={14} color="white" />
                         </TouchableOpacity>
@@ -1223,10 +1233,11 @@ const styles = StyleSheet.create({
   dateArrow: { color: '#94a3b8', fontWeight: '700', fontSize: 16 },
 
   chartCard: { backgroundColor: 'white', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', padding: 14, marginBottom: 14, elevation: 2 },
-  chartRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 16 },
-  piesWrap: { flex: 2.5, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', minWidth: 380, gap: 8 },
+  chartRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 12 },
+  // piesWrap: no minWidth — let flex handle it. overflow hidden to clip SVG if somehow oversized
+  piesWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 0, overflow: 'hidden' },
 
-  sumCol: { flex: 0.8, gap: 8, minWidth: 160, maxWidth: 220 },
+  sumCol: { width: 180, flexShrink: 0, gap: 8 },
   sumRowMobile: { flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
   sumCard: { borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, elevation: 2 },
   sumTitle: { fontSize: 12, fontWeight: '700', color: 'white', marginBottom: 2 },
