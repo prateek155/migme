@@ -1709,6 +1709,20 @@ async function processEmail(
       } catch (_) {}
     }
 
+     // ✅ NEW — IRCTC structural guard: paste it HERE
+    if (detectedType === "irctc") {
+      const hasPdfAttachment = (parsed.attachments || []).some(
+        (att) => att.contentType === "application/pdf",
+      );
+      if (hasPdfAttachment) {
+        log(`${tag} Skipping IRCTC PDF-attachment email (not a real order): "${subject}"`);
+        sessionUIDCache.add(uid);
+        await recordProcessedEmail(uidStr, "", "skipped_fake", clientId);
+        await markEmailAsRead(connection, uid);
+        return;
+      }
+    }
+
     // ── Skip known-fake subjects per vendor ────────────────────────────────
     const skipPatterns = VENDOR_SKIP_SUBJECTS[detectedType];
     if (skipPatterns) {
