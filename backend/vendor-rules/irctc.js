@@ -124,7 +124,7 @@ const domConfig = {
   },
 };
 
-const skipSubjects = ['Delivery Time Passed'];
+const skipSubjects = ['delivery time passed', 'delivered'];
 
 const matchers = [
   { match: 'ecatering',  name: 'IRCTC', type: 'irctc' },
