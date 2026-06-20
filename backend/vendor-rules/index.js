@@ -41,7 +41,6 @@ const dibrail     = require('./dibrail');
 const spicywagon  = require('./spicywagon');
 const irctc       = require('./irctc');
 const gofood      = require('./gofood');
-const olf         = require('./olf');
 const travelkhana = require('./travelkhana');
 const generic     = require('./generic');
 
@@ -59,7 +58,6 @@ const vendors = [
   spicywagon,
   irctc,
   gofood,
-  olf,
   travelkhana,
   generic,
 ];
