@@ -39,6 +39,9 @@
  * DATE:  ETA field "12-Jun-2026 22:02" → deliveryDate = "2026-06-12", deliveryTime = "22:02"
  *        ⚠ Never trust "DELIVERY TIME" field — always use ETA for both date and time.
  * PAYMENT: "PRE_PAID" → "Prepaid", otherwise "COD"
+ * CUSTOMER NAME: ⚠ Never present in IRCTC emails — email is addressed to the vendor.
+ *        Fallback → contactNo present : "Customer (XXXXXXXXXX)"
+ *                 → contactNo missing : "IRCTC Customer"
  */
 
 const domConfig = {
@@ -101,7 +104,7 @@ const domConfig = {
   },
 
   postProcess(order) {
-    // ETA format: "12-Jun-2026 22:02" — always reliable. Ignore "DELIVERY TIME" and "JOURNEY DATE" fields.
+    // ETA format: "12-Jun-2026 22:02" — always reliable. Ignore "DELIVERY TIME" and "JOURNEY DATE".
     const eta = order._etaRaw || '';
     const m = eta.match(/(\d{2})-([A-Za-z]{3})-(\d{4})\s+(\d{2}:\d{2})/);
     if (m) {
@@ -119,6 +122,14 @@ const domConfig = {
       order.totalAmount = order._itemsTotal;
     }
     delete order._itemsTotal;
+
+    // CUSTOMER NAME: never present in IRCTC emails — email is addressed to the vendor.
+    // Always apply fallback — do not attempt to fetch from email.
+    if (!order.customerName) {
+      order.customerName = order.contactNo
+        ? `Customer (${order.contactNo})`
+        : 'IRCTC Customer';
+    }
 
     return order;
   },
@@ -155,6 +166,11 @@ ORDER DETAILS TABLE — 7 rows, 4 columns (label | value | label | value):
               Ignore "DELIVERY TIME" (18:01 is wrong) and "JOURNEY DATE" — ETA is the reliable source.
 - COACH:      "COACH NO / SEAT NO" → trim → normalize "/" → "B4/22".
 - PAYMENT:    "PAYMENT STATUS" → "PRE_PAID"/"PREPAID"/"ONLINE"/"PAID"→"Prepaid" || "COD".
+- CUSTOMER NAME: *** NOT PRESENT in IRCTC emails — field does not exist ***.
+              Email is addressed to the vendor ("Dear Hotel Samrat"), NOT the customer.
+              Do NOT attempt to fetch from email — always use fallback:
+              Fallback → contactNo present : "Customer (XXXXXXXXXX)"
+                       → contactNo missing : "IRCTC Customer"
 
 ITEMS TABLE — 4 columns: Item | Price | Quantity | Amount
   Column 0 = Item name.
