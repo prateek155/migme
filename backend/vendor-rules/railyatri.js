@@ -102,7 +102,7 @@
  *             trainName → trimmed text after " - "  → "DDR AJMER SF EXP"
  *
  * COACH:      text/plain "Coach and Seat No." → next non-empty line
- *             "A1 , 8" → replace /\s*,\s*/ with "/" → "A1/8"
+ *             "A1 , 8" → normalize comma+spaces to "/" → "A1/8"
  *
  * ITEMS:      HTML <table id="order-details">
  *             Col 1 → qty (parseInt)
@@ -298,7 +298,7 @@ Each field: label on one line → value on next non-empty trimmed line.
                        trainInfo → digits before " -" → "12989"
                        trainName → text after  " - " → "DDR AJMER SF EXP"
   Coach and Seat No. → coach
-                       Raw: "A1 , 8" → replace /\s*,\s*/ with "/" → "A1/8"
+                       Raw: "A1 , 8" → normalize comma+spaces to "/" → "A1/8"
 
 SPECIAL INLINE LINE (single line matched by regex — not label+value):
   "Delivery at Vadodara Junction" → /^Delivery at (.+)/i → "Vadodara Junction"
