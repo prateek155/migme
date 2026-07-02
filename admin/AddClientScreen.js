@@ -73,6 +73,7 @@ export default function AddClientScreen({ onBack }) {
   const isDesktop = width >= 768;
 
   const [businessName, setBusinessName]         = useState('');
+  const [address, setAddress]                   = useState('');
   const [email, setEmail]                       = useState('');
   const [appPassword, setAppPassword]           = useState('');
   const [showAppPw, setShowAppPw]               = useState(false);
@@ -83,6 +84,7 @@ export default function AddClientScreen({ onBack }) {
 
   const checks = {
     businessName: businessName.trim().length > 0,
+    address:      address.trim().length > 0,
     email:        /^[^\s@]+@gmail\.com$/i.test(email),
     appPassword:  appPassword.length > 3,
     password:     generatedPassword.length >= 6,
@@ -104,6 +106,7 @@ export default function AddClientScreen({ onBack }) {
               },
                 body: JSON.stringify({
                 businessName: businessName.trim(),
+                address: address.trim(),
                 email: email.trim().toLowerCase(),
                 appPassword: appPassword.trim(),
                 password: generatedPassword,
@@ -136,6 +139,7 @@ export default function AddClientScreen({ onBack }) {
           <Text style={s.sideCardTitle}>Form checklist</Text>
         </View>
         <CheckItem done={checks.businessName} label="Business name entered" />
+        <CheckItem done={checks.address}      label="Business address entered" />
         <CheckItem done={checks.email}        label="Valid Gmail address" />
         <CheckItem done={checks.appPassword}  label="App password added" />
         <CheckItem done={checks.password}     label="Login password set" />
@@ -148,6 +152,7 @@ export default function AddClientScreen({ onBack }) {
           <Text style={s.sideCardTitle}>Live preview</Text>
         </View>
         <PreviewRow label="Business" value={businessName || '—'} />
+        <PreviewRow label="Address"  value={address || '—'} />
         <PreviewRow label="Email"    value={email || '—'} />
         <PreviewRow label="Status"   badge />
       </View>
@@ -236,6 +241,24 @@ export default function AddClientScreen({ onBack }) {
               </View>
             </View>
 
+            {/* Business address — used on printed bills */}
+            <View style={s.field}>
+              <Text style={s.label}>Business address</Text>
+              <View style={s.inputWrap}>
+                <TextInput
+                  style={[s.input, s.textArea]}
+                  placeholder="e.g. Shop No. 4, Station Road, Pune, Maharashtra 411001"
+                  placeholderTextColor="#4b5563"
+                  value={address}
+                  onChangeText={setAddress}
+                  multiline
+                  numberOfLines={2}
+                  textAlignVertical="top"
+                />
+              </View>
+              <Text style={s.helperText}>This is printed on every delivery receipt for this client.</Text>
+            </View>
+
             {/* Gmail app password */}
             <View style={s.field}>
               <Text style={s.label}>Gmail app password</Text>
@@ -313,6 +336,7 @@ export default function AddClientScreen({ onBack }) {
                   <Text style={s.sideCardTitle}>Checklist</Text>
                 </View>
                 <CheckItem done={checks.businessName} label="Business name entered" />
+                <CheckItem done={checks.address}      label="Business address entered" />
                 <CheckItem done={checks.email}        label="Valid Gmail address" />
                 <CheckItem done={checks.appPassword}  label="App password added" />
                 <CheckItem done={checks.password}     label="Login password set" />
@@ -395,6 +419,8 @@ const s = StyleSheet.create({
   inputWrap:            { justifyContent: 'center' },
   input:                { borderWidth: 1, borderColor: '#374151', borderRadius: 8, paddingVertical: 11, paddingHorizontal: 14, fontSize: 14, color: '#f9fafb', backgroundColor: '#111827' },
   inputIcon:            { paddingRight: 40 },
+  textArea:             { minHeight: 56, paddingTop: 11 },
+  helperText:           { fontSize: 11, color: '#6b7280', marginTop: 6 },
   iconRight:            { position: 'absolute', right: 12 },
   iconBtn:              { position: 'absolute', right: 12, padding: 2 },
 
