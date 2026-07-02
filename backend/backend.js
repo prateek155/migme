@@ -14,6 +14,10 @@ const imaps = require("imap-simple");
 const { simpleParser } = require("mailparser");
 // DOM parsing for text/html vendors — used by parseDomOrder()
 const cheerio = require("cheerio");
+// ✅ FIX 1: decode import kept for any future use but NOT called on parsed.html
+// mailparser's simpleParser already decodes quoted-printable — calling decodeQP
+// again on parsed.html corrupts = signs, ₹ symbol, CSS values and HTML attributes.
+// parseDomOrder now uses htmlBody directly without re-decoding.
 const { decode: decodeQP } = require("quoted-printable");
 
 // ── Firebase client SDK ────────────────────────────────────────────────────
@@ -111,62 +115,12 @@ const log = (msg) => writeLog("INFO", msg);
 const warn = (msg) => writeLog("WARN", msg);
 const err = (msg) => writeLog("ERROR", msg);
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ✅ LAYER 1 — PROCESS-LEVEL SAFETY NET
-// This is the LAST line of defense, not the first. Layers 2 and 3 (below,
-// near the IMAP connection code) are meant to catch socket problems BEFORE
-// they ever reach here. This handler only exists in case something slips
-// past those — e.g. a raw socket 'error' event with truly no listener
-// anywhere in the call chain.
-//
-// Problem it guards against: "This socket has been ended by the other party"
-// (and similar ECONNRESET/EPIPE errors) used to surface as an
-// uncaughtException, which called process.exit(1) — killing the ENTIRE
-// process and dropping every client's active poller because of ONE
-// client's network blip.
-//
-// Fix: recognize harmless socket/pipe errors by code or message, log and
-// continue. Only genuinely unexpected errors exit the process (so
-// Railway/PM2 can auto-restart cleanly).
-// ═══════════════════════════════════════════════════════════════════════════
-function isHarmlessSocketError(e) {
-  const harmlessCodes = [
-    "ECONNRESET",
-    "EPIPE",
-    "ENOTCONN",
-    "ECONNABORTED",
-    "ETIMEDOUT",
-    "EHOSTUNREACH",
-    "ECONNREFUSED",
-  ];
-  if (e && harmlessCodes.includes(e.code)) return true;
-  const msg = (e && e.message) || "";
-  return (
-    msg.includes("socket has been ended") ||
-    msg.includes("write after end") ||
-    msg.includes("This socket has been ended by the other party") ||
-    msg.includes("read ECONNRESET") ||
-    msg.includes("Connection closed") ||
-    msg.includes("IMAP_HANG") ||
-    msg.endsWith("_TIMEOUT")
-  );
-}
-
 process.on("uncaughtException", (e) => {
-  if (isHarmlessSocketError(e)) {
-    warn(`[Layer 1] uncaughtException (harmless socket/timeout — ignored, process stays alive): ${e.message}`);
-    return;
-  }
-  err(`[Layer 1] uncaughtException (fatal — exiting for clean restart): ${e.stack || e.message}`);
+  err(`uncaughtException: ${e.stack || e.message}`);
   setTimeout(() => process.exit(1), 500);
 });
-
 process.on("unhandledRejection", (reason) => {
-  if (isHarmlessSocketError(reason)) {
-    warn(`[Layer 1] unhandledRejection (harmless socket/timeout — ignored): ${reason?.message || reason}`);
-    return;
-  }
-  err(`[Layer 1] unhandledRejection: ${reason?.stack || reason}`);
+  err(`unhandledRejection: ${reason?.stack || reason}`);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -457,48 +411,42 @@ async function warmEmailCache(clientId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// recordProcessedEmail
+// ✅ FIX 5: recordProcessedEmail — do NOT add incomplete_data UIDs to emailSet
+//
+// OLD BUG: emailSet.add(uidStr) was called unconditionally for ALL statuses,
+// including 'incomplete_data'. This meant Guard 2 (emailSet.has) fired on the
+// next cycle BEFORE Guard 3 could check for 'incomplete_data' and allow retry.
+// Result: any order that failed field validation was permanently lost until
+// server restart, even though the email remained unread in IMAP.
+//
+// FIX: Only add to emailSet for truly final statuses. 'incomplete_data' emails
+// stay OUT of the in-memory set so Guard 3 gets a chance to retry them.
 // ═══════════════════════════════════════════════════════════════════════════
-async function recordProcessedEmail(uidStr, orderNo, status, clientId, extraFields = {}) {
+async function recordProcessedEmail(uidStr, orderNo, status, clientId) {
   const date = todayStr();
   const emailSet = getEmailSet(date, clientId);
 
-  const permanentStatuses = [
-    "success",
-    "update_applied",
-    "duplicate",
-    "blocked_sender",
-    "skipped_fake",
-    "ai_exhausted",
-  ];
-  if (permanentStatuses.includes(status)) {
+  // ✅ FIX 5: only cache in memory if status is truly final
+  if (status !== "incomplete_data") {
     emailSet.add(uidStr);
   }
 
   try {
-    await setDoc(
-      doc(db, "processed_emails", emailDocId(clientId, uidStr)),
-      {
-        status,
-        orderNo: orderNo || "",
-        clientId,
-        processedAt: new Date().toISOString(),
-        ...extraFields,
-      },
-      { merge: true },
+    await setDoc(doc(db, "processed_emails", emailDocId(clientId, uidStr)), {
+      status,
+      orderNo: orderNo || "",
+      clientId,
+      processedAt: new Date().toISOString(),
+    });
+    const indexRef = doc(
+      db,
+      "processed_emails_index",
+      emailIndexId(clientId, date),
     );
-
-    if (permanentStatuses.includes(status)) {
-      const indexRef = doc(
-        db,
-        "processed_emails_index",
-        emailIndexId(clientId, date),
-      );
-      const indexSnap = await getDoc(indexRef);
-      const existing = indexSnap.exists() ? indexSnap.data().uids || [] : [];
-      if (!existing.includes(uidStr)) {
-        await setDoc(indexRef, { uids: [...existing, uidStr] }, { merge: true });
-      }
+    const indexSnap = await getDoc(indexRef);
+    const existing = indexSnap.exists() ? indexSnap.data().uids || [] : [];
+    if (!existing.includes(uidStr)) {
+      await setDoc(indexRef, { uids: [...existing, uidStr] }, { merge: true });
     }
   } catch (e) {
     warn(`recordProcessedEmail failed: ${e.message}`);
@@ -819,37 +767,6 @@ if (typeof pdfParse !== "function") pdfParse = async () => ({ text: "" });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ LAYER 3 — OPERATION-LEVEL TIMEOUT WRAPPER (fixes IMAP_HANG)
-//
-// Problem: a "half-open" TCP socket doesn't error and doesn't close — it just
-// goes silent. Neither Layer 1 (uncaughtException) nor Layer 2 (imap 'error'/
-// 'close' listeners) fire for this, because nothing was ever thrown or
-// emitted. Any bare `await connection.search(...)` or `await
-// connection.addFlags(...)` can then hang FOREVER, freezing that client's
-// polling cycle permanently (Promise.allSettled never settles, so the next
-// setTimeout(cycle, 30000) never gets scheduled).
-//
-// Fix: every IMAP network call in this file is wrapped in withTimeout(). If
-// the call doesn't resolve/reject within the given window, we reject
-// ourselves with a "<LABEL>_TIMEOUT" error. That error is recognized as
-// harmless by isHarmlessSocketError() (Layer 1) and is also caught locally
-// by processEmail's / runPollingCycle's own try/catch, which triggers the
-// existing reconnect logic — so a hang can never block the process anymore.
-// ═══════════════════════════════════════════════════════════════════════════
-function withTimeout(promise, ms, label) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ✅ AI ATTEMPT LIMIT
-// ═══════════════════════════════════════════════════════════════════════════
-const MAX_AI_ATTEMPTS = 5;
-
-// ═══════════════════════════════════════════════════════════════════════════
 // VENDOR REGISTRY
 // ═══════════════════════════════════════════════════════════════════════════
 const {
@@ -862,13 +779,9 @@ const {
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
-
-// ✅ PRODUCTION MODE — reads only UNSEEN emails, marks them read after
-// processing. markEmailAsRead is now wrapped in withTimeout (Layer 3) so a
-// hung addFlags() call can never block a cycle.
 async function markEmailAsRead(connection, uid) {
   try {
-    await withTimeout(connection.addFlags(uid, ["\\Seen"]), 10000, "MARK_READ");
+    await connection.addFlags(uid, ["\\Seen"]);
     log(`   ✉️  UID ${uid} marked as read`);
   } catch (e) {
     warn(`   ⚠️  Could not mark UID ${uid} as read: ${e.message}`);
@@ -923,119 +836,49 @@ function htmlToText(html) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DOM ORDER PARSER — text/html vendors only
-// (unchanged from previous version — all vendor fixes 1-9c preserved)
+//
+// ✅ FIX 1: Removed decodeQP(htmlBody) call.
+//    mailparser's simpleParser already decodes quoted-printable encoding.
+//    Calling decodeQP again on already-decoded HTML corrupted:
+//      - = signs in HTML attributes and CSS (e.g. color=#3d3d3d became color=3d3d3d)
+//      - ₹ rupee symbol (multi-byte UTF-8, mangled by second QP decode)
+//      - URL query strings with & and = characters
+//    This caused Cheerio to find nothing, DOM parse returned null every time,
+//    and all railfood/railreceipt orders fell through to AI with broken text.
+//
+// ✅ FIX 2: selfContained field support (railfood orderNo).
+//    When cfg.selfContained is true, the value is in the SAME <td> as the label
+//    (e.g. "REL FOOD Ref.No : 1050866" all in one cell). The engine now extracts
+//    the last number from the label cell's own text instead of reading a sibling.
+//    Already present in original code — confirmed correct, no change needed.
+//
+// ✅ FIX 3: stripQtyPrefix support (railreceipt "x6" → 6).
+//    parseInt("x6") returns NaN → was defaulting every item to qty=1.
+//    Now strips vendor-defined prefix before parseInt.
+//
+// ✅ FIX 4: stripCurrencyPrefix support (railreceipt "₹ 180" → 180).
+//    parseFloat("₹ 180") returns NaN → was setting every item price to 0.
+//    Now strips vendor-defined currency prefix before parseFloat.
 // ═══════════════════════════════════════════════════════════════════════════
-function htmlToLines(htmlBody) {
-  return htmlBody
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<\/div>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-}
-
-function parseLineBasedOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
-  try {
-    const lines = htmlToLines(htmlBody);
-    const order = { vendorName };
-
-    for (const [fieldName, cfg] of Object.entries(domConfig.lineBasedFields || {})) {
-      let rawValue = null;
-      for (const line of lines) {
-        const m = line.match(cfg.match);
-        if (m) {
-          rawValue = m[1] !== undefined ? m[1].trim() : m[0].trim();
-          break;
-        }
-      }
-      order[fieldName] = rawValue !== null
-        ? (cfg.transform ? cfg.transform(rawValue) : rawValue)
-        : null;
-    }
-
-    const items = [];
-    const itemsCfg = domConfig.lineBasedItems;
-    if (itemsCfg) {
-      let inItems = false;
-      for (const line of lines) {
-        if (!inItems) {
-          const _startHit = typeof itemsCfg.startMarker === "string"
-            ? line.toUpperCase().includes(itemsCfg.startMarker.toUpperCase())
-            : itemsCfg.startMarker.test(line);
-          if (_startHit) {
-            inItems = true;
-          }
-          continue;
-        }
-        if (itemsCfg.endMarker.test(line)) break;
-        if (itemsCfg.skipPattern && itemsCfg.skipPattern.test(line)) continue;
-
-        const m = line.match(itemsCfg.itemLineMatch);
-        if (m) {
-          const nameGroup = itemsCfg.nameGroup || 1;
-          const qtyGroup = itemsCfg.qtyGroup || 2;
-          const name = m[nameGroup].trim();
-          const qty = parseInt(m[qtyGroup], 10) || 1;
-          items.push({ name, quantity: qty, price: 0 });
-          log(`${tag}      DOM item (line-based): "${name}" × ${qty}`);
-        }
-      }
-    }
-    order.items = items;
-
-    if (items.length === 0) {
-      warn(`${tag} ⚠ line-based DOM parse found 0 items — returning null to trigger AI fallback`);
-      return null;
-    }
-
-    let finalOrder = order;
-    if (typeof domConfig.postProcess === "function") {
-      finalOrder = domConfig.postProcess(order) || order;
-    }
-
-    finalOrder.vendorName = vendorName;
-    finalOrder.tax = finalOrder.tax ?? 0;
-    finalOrder.deliveryCharge = finalOrder.deliveryCharge ?? 0;
-    finalOrder.remark = finalOrder.remark ?? "";
-
-    log(
-      `${tag} ✅ line-based DOM parse complete — ${items.length} item(s), ₹${finalOrder.totalAmount}`,
-    );
-    return finalOrder;
-  } catch (e) {
-    err(`${tag} parseLineBasedOrder crashed: ${e.message}`);
-    return null;
-  }
-}
-
 function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
-  if (domConfig.lineBased) {
-    return parseLineBasedOrder(htmlBody, vendorName, vendorType, domConfig, tag);
-  }
-
   try {
+    // ✅ FIX 1: Use htmlBody directly — mailparser already decoded quoted-printable.
+    // REMOVED: const cleanHtml = decodeQP(htmlBody);
+    // REMOVED: const $ = cheerio.load(cleanHtml);
     const $ = cheerio.load(htmlBody);
     const order = { vendorName };
 
+    // ── 1a. Extract header <th> cells (Rajbhog/HomeBytes style) ────────────
     const _thCells = [];
     $("thead th").each((_, el) => {
       _thCells.push($(el).text().replace(/\s+/g, " ").trim());
     });
 
+    // ── 1b. Extract flat key/value fields ────────────────────────────────
     for (const [fieldName, cfg] of Object.entries(domConfig.fields)) {
       let rawValue = null;
 
+      // headerThIndex fields: value is pre-extracted from header <th>
       if (cfg.headerThIndex !== undefined && _thCells[cfg.headerThIndex]) {
         rawValue = _thCells[cfg.headerThIndex];
       } else {
@@ -1044,35 +887,33 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
         for (const labelText of labelsToTry) {
           $("td, th").each((_, el) => {
+            // Skip wrapper cells that contain child td/th (e.g. RailRecipe's
+            // nested outer td wrappers around inner label-value cells)
             if ($(el).find("td, th").length > 0) return;
             const cellText = $(el).text().replace(/\s+/g, " ").trim();
-            const isMatch = cfg.exactMatch
-              ? cellText === labelText
-              : cellText.includes(labelText);
-            if (isMatch) {
+            if (cellText.includes(labelText)) {
               if (cfg.selfContained) {
+                // Try all matches — last match (deepest in DOM) wins.
+                // This avoids picking merged header cells that happen to contain
+                // the label text but may have truncated/wrong values at the end.
+                // 1) Vendor-defined custom regex extract (e.g. greeting "Dear <name>,")
                 if (cfg.selfContainedExtract) {
                   const m = cellText.match(cfg.selfContainedExtract);
                   if (m) rawValue = m[1] || m[0];
                 }
+                // 2) Colon separator: "Label : Value"
                 const colonMatch = cellText.match(/:\s*(.+?)\s*$/);
                 if (colonMatch) {
                   rawValue = colonMatch[1];
                 } else {
+                  // 3) Trailing number: "Label 12345"
                   const numMatch = cellText.match(/(\d+)\s*$/);
                   if (numMatch) {
                     rawValue = numMatch[1];
                   }
                 }
               } else {
-                let sibling = $(el).next("td, th");
-                if (
-                  cfg.skipColon &&
-                  sibling.length &&
-                  /^:+-?$/.test(sibling.text().trim())
-                ) {
-                  sibling = sibling.next("td, th");
-                }
+                const sibling = $(el).next("td, th");
                 if (sibling.length) {
                   rawValue = sibling.text().replace(/\s+/g, " ").trim();
                   return false;
@@ -1084,6 +925,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         }
       }
 
+      // Strip vendor-defined value prefix if present (e.g. Zoop ": " prefix)
       if (
         rawValue !== null &&
         cfg.valuePrefix &&
@@ -1100,6 +942,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       }
     }
 
+    // ── 2. Extract items table ─────────────────────────────────────────────
     const { columnMap, itemCellSplit, footerLabels } = domConfig.itemsTable;
     const colIndex = {};
     let headerFound = false;
@@ -1109,32 +952,27 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       const cells = $(tr).find("td, th");
       if (!cells.length) return;
 
+      // ── Detect header row ────────────────────────────────────────────────
       if (!headerFound) {
-        const columnMapEntries = Object.entries(columnMap);
-        if (cells.length !== columnMapEntries.length) return;
+        // Skip rows that don't have exactly the right number of columns
+        // (prevents nested wrapper rows with embedded header text from being detected)
+        if (cells.length !== Object.keys(columnMap).length) return;
 
-        const used = new Array(columnMapEntries.length).fill(false);
         let matchCount = 0;
         cells.each((i, td) => {
           const text = $(td).text().trim().toLowerCase();
-          for (let k = 0; k < columnMapEntries.length; k++) {
-            if (used[k]) continue;
-            const [headerText, fieldName] = columnMapEntries[k];
-            const normalizedHeader = /^__empty\d*$/.test(headerText)
-              ? ""
-              : headerText.toLowerCase();
-            if (text === normalizedHeader) {
+          for (const [headerText, fieldName] of Object.entries(columnMap)) {
+            if (text === headerText.toLowerCase()) {
               colIndex[fieldName] = i;
-              used[k] = true;
               matchCount++;
-              break;
             }
           }
         });
-        if (matchCount === columnMapEntries.length) headerFound = true;
+        if (matchCount === Object.keys(columnMap).length) headerFound = true;
         return;
       }
 
+      // ── Footer detection: RailFood pattern (first empty + second=label) OR Zoop pattern (first=label) ──
       const firstText = cells.eq(0).text().trim();
       const secondText = cells.eq(1).text().trim();
       const isFooter =
@@ -1146,54 +984,31 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
           firstText.toLowerCase().includes(l.toLowerCase()),
         );
       if (isFooter) {
+        // Capture footer total if configured and this row matches the capture label
         if (domConfig.itemsTable.captureFooterTotal) {
-          const captureConfig = domConfig.itemsTable.captureFooterTotal;
-          const isMultiCapture = Array.isArray(captureConfig);
-          const captureLabels = isMultiCapture
-            ? captureConfig
-            : [captureConfig];
-
+          const captureLabel =
+            domConfig.itemsTable.captureFooterTotal.toLowerCase();
+          // Use startsWith (normalized) so "Total" doesn't match "Subtotal"
+          // but still matches "Grand Total (Inclusive of all taxes)" (Yatri Restro)
           const normalizeFooter = (s) =>
             s.toLowerCase().replace(/:+$/g, "").trim();
-
-          for (const rawLabel of captureLabels) {
-            const captureLabel = rawLabel.toLowerCase();
-            if (
-              normalizeFooter(firstText).startsWith(captureLabel) ||
-              normalizeFooter(secondText).startsWith(captureLabel)
-            ) {
-              const lastCell = cells.last();
-              const value =
-                parseFloat(lastCell.text().replace(/[^\d.]/g, "")) || 0;
-
-              if (!isMultiCapture) {
-                order._itemsTotal = value;
-                log(`${tag} Captured _itemsTotal: ${order._itemsTotal}`);
-                return false;
-              }
-
-              if (!order._footerCaptures) order._footerCaptures = {};
-              order._footerCaptures[rawLabel] = value;
-              log(`${tag} Captured _footerCaptures["${rawLabel}"]: ${value}`);
-              if (rawLabel === captureLabels[0]) {
-                order._itemsTotal = value;
-              }
-            }
+          if (
+            normalizeFooter(firstText).startsWith(captureLabel) ||
+            normalizeFooter(secondText).startsWith(captureLabel)
+          ) {
+            const lastCell = cells.last();
+            order._itemsTotal =
+              parseFloat(lastCell.text().replace(/[^\d.]/g, "")) || 0;
+            log(`${tag} Captured _itemsTotal: ${order._itemsTotal}`);
+            return false; // break after capturing Total
           }
-
-          if (isMultiCapture) {
-            const allCaptured = captureLabels.every(
-              (l) =>
-                order._footerCaptures && l in order._footerCaptures,
-            );
-            if (allCaptured) return false;
-            return;
-          }
-          return;
+          return; // keep scanning footer rows to reach Total
         }
         return false;
       }
 
+      // ── Skip rows where the item-name cell still contains a header label ──
+      // (handles wrapper/summary rows that appear after the header in some emails)
       const _rawItemText = cells
         .eq(colIndex["rawItem"])
         .text()
@@ -1202,6 +1017,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
       if (Object.keys(columnMap).some((h) => _rawItemText === h.toLowerCase()))
         return;
 
+      // ── Parse item row ───────────────────────────────────────────────────
       const rawItemCell = cells.eq(colIndex["rawItem"]);
       const priceText = cells.eq(colIndex["price"]).text().trim();
       const qtyText = cells.eq(colIndex["qty"]).text().trim();
@@ -1216,6 +1032,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         itemName = parts[0] || "";
         itemDesc = parts[1] || "";
       } else if (domConfig.itemsTable.itemNameFromP) {
+        // ── Railreceipt: <p> = name, <small> = description ───────────────
         itemName = rawItemCell.find("p").first().text().trim();
         itemDesc = rawItemCell.find("small").text().trim();
       } else {
@@ -1228,15 +1045,19 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
         itemDesc = parts[1] || "";
       }
 
-      if (!itemName || !qtyText) return;
-      const hasPriceColumn = Object.values(columnMap).includes("price");
-      if (hasPriceColumn && !priceText) return;
+      if (!itemName || !qtyText || !priceText) return;
 
+      // ✅ FIX 4: Strip vendor-defined currency prefix before parseFloat.
+      // Handles railreceipt "₹ 180" format — parseFloat("₹ 180") returns NaN.
+      // For all other vendors stripCurrencyPrefix is undefined → no change.
       const cleanPriceText = domConfig.itemsTable.stripCurrencyPrefix
         ? priceText.replace(domConfig.itemsTable.stripCurrencyPrefix, "").trim()
         : priceText;
       const price = parseFloat(cleanPriceText) || 0;
 
+      // ✅ FIX 3: Strip vendor-defined quantity prefix before parseInt.
+      // Handles railreceipt "x6" format — parseInt("x6") returns NaN → was 1.
+      // For all other vendors stripQtyPrefix is undefined → no change.
       const cleanQtyText = domConfig.itemsTable.stripQtyPrefix
         ? qtyText
             .replace(
@@ -1249,6 +1070,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
       const name = itemDesc ? `${itemName} ${itemDesc}` : itemName;
 
+      // Capture amount column for cross-check if vendor defines it
       let itemAmount = null;
       if (
         domConfig.itemsTable.enableQtyCrossCheck &&
@@ -1503,6 +1325,9 @@ function validateOrderData(data, vendorType) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AI — FILL MISSING FIELDS FROM DOM PARSE
+// ── When DOM parser gets most fields right but misses a few (e.g. deliveryDate
+//    format changed), send a TARGETED AI prompt asking only for those missing
+//    fields. Saves cost vs re-processing the entire email through AI.
 // ═══════════════════════════════════════════════════════════════════════════
 async function fillMissingFields(emailText, missingFieldsStr, tag) {
   const fieldDescriptions = {
@@ -1750,6 +1575,19 @@ function buildChangePayload(existingOrder, updateResult) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// FETCH SINCE — TESTING MODE
+// ─────────────────────────────────────────────────────────────────────────
+// PRODUCTION CHANGE (when going live):
+//   Replace the IMAP search in runPollingCycle from:
+//     connection.search([['SINCE', FETCH_SINCE]], ...)
+//   To:
+//     connection.search(['UNSEEN'], ...)
+//   Then delete FETCH_SINCE_FIXED, getFetchSince(), and the FETCH_SINCE
+//   variable inside runPollingCycle — they become dead code.
+//   Optionally fill in markEmailAsRead() to mark emails as read after saving.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
 // EMAIL PROCESSOR
 // ═══════════════════════════════════════════════════════════════════════════
 async function processEmail(
@@ -1771,24 +1609,26 @@ async function processEmail(
     if (sessionUIDCache.has(uid)) return; // Guard 1
 
     if (emailSet.has(uidStr)) {
+      // Guard 2
       sessionUIDCache.add(uid);
       return;
     }
 
     try {
+      // Guard 3
       const processedSnap = await getDoc(
         doc(db, "processed_emails", emailDocId(clientId, uidStr)),
       );
       if (processedSnap.exists()) {
         const prevStatus = processedSnap.data().status;
-        if (prevStatus !== "incomplete_data" && prevStatus !== "ai_failed" && prevStatus !== "ai_in_progress") {
+        if (prevStatus !== "incomplete_data") {
           log(`${tag} UID ${uidStr} already in DB (${prevStatus}) — skipping`);
           emailSet.add(uidStr);
           sessionUIDCache.add(uid);
           await markEmailAsRead(connection, uid);
           return;
         }
-        log(`${tag} UID ${uidStr} was "${prevStatus}" — retrying parse`);
+        log(`${tag} UID ${uidStr} was incomplete — retrying parse`);
       }
     } catch (e) {
       warn(
@@ -1796,25 +1636,20 @@ async function processEmail(
       );
     }
 
-    // ✅ LAYER 3 — full body fetch wrapped in withTimeout (fixes IMAP_HANG).
-    // Previously this call had NO timeout at all — a half-open socket here
-    // would freeze this email's processing forever, silently blocking the
-    // whole Promise.allSettled batch. Now it fails fast at 20s and the outer
-    // catch below handles it as a normal retry-next-cycle case.
-    const fullMsg = await withTimeout(
-      connection.search([["UID", uid]], { bodies: [""], markSeen: false }),
-      20000,
-      "FULL_FETCH",
-    );
+    const fullMsg = await connection.search([["UID", uid]], {
+      bodies: [""],
+      markSeen: false,
+    });
     if (!fullMsg || fullMsg.length === 0) return;
     const parsed = await simpleParser(
       fullMsg[0].parts.find((p) => p.which === "").body,
     );
 
-    // Guard 4 — date filter (production: only emails since client was created)
+    // Guard 4 — date filter: skip emails older than when this client was added
     const emailDate = parsed.date ? new Date(parsed.date) : new Date();
     const FETCH_SINCE = new Date(clientCreatedAt || Date.now());
     if (emailDate < FETCH_SINCE) {
+      // Guard 4 — old email, mark as read so it never appears again
       sessionUIDCache.add(uid);
       await markEmailAsRead(connection, uid);
       return;
@@ -1845,6 +1680,7 @@ async function processEmail(
       );
 
     if (!subjectMatches && !vendorFromSender) {
+      // Guard 5
       sessionUIDCache.add(uid);
       await markEmailAsRead(connection, uid);
       return;
@@ -1873,7 +1709,7 @@ async function processEmail(
       } catch (_) {}
     }
 
-    // IRCTC structural guard
+     // ✅ NEW — IRCTC structural guard: paste it HERE
     if (detectedType === "irctc") {
       const hasPdfAttachment = (parsed.attachments || []).some(
         (att) => att.contentType === "application/pdf",
@@ -1942,6 +1778,7 @@ async function processEmail(
       );
       if (orderData) {
         log(`${tag}    ✅ DOM parse succeeded — Bedrock not called`);
+        // ── Check if DOM got most fields but some are missing ──────────
         const missingFields = getMissingFields(orderData);
         if (missingFields) {
           log(
@@ -1987,82 +1824,18 @@ async function processEmail(
 
     // ── PATH B: AI / Bedrock ──────────────────────────────────────────────
     if (!orderData) {
-      let previousAttempts = 0;
-      try {
-        const prevSnap = await getDoc(
-          doc(db, "processed_emails", emailDocId(clientId, uidStr)),
-        );
-        if (prevSnap.exists()) {
-          previousAttempts = prevSnap.data().aiAttempts || 0;
-        }
-      } catch (_) {}
-
-      if (previousAttempts >= MAX_AI_ATTEMPTS) {
-        warn(
-          `${tag} UID ${uidStr} has failed AI parse ${previousAttempts}/${MAX_AI_ATTEMPTS} times — permanently skipping`,
-        );
-        sessionUIDCache.add(uid);
-        await recordProcessedEmail(uidStr, "", "ai_exhausted", clientId, {
-          aiAttempts: previousAttempts,
-          subject,
-          from: fromAddress,
-          exhaustedAt: new Date().toISOString(),
-        });
-        await markEmailAsRead(connection, uid);
-        return;
-      }
-
-      const thisAttemptNo = previousAttempts + 1;
-      log(`${tag}    🤖 AI attempt ${thisAttemptNo}/${MAX_AI_ATTEMPTS} for UID ${uidStr}`);
-      try {
-        await setDoc(
-          doc(db, "processed_emails", emailDocId(clientId, uidStr)),
-          {
-            status: "ai_in_progress",
-            orderNo: "",
-            clientId,
-            aiAttempts: thisAttemptNo,
-            lastAttemptAt: new Date().toISOString(),
-            subject,
-            from: fromAddress,
-          },
-          { merge: true },
-        );
-      } catch (_) {}
-
       orderData = await parseWithAWS(fullText, subject, fromAddress);
-
-      if (!orderData) {
-        const isExhausted = thisAttemptNo >= MAX_AI_ATTEMPTS;
-        try {
-          await setDoc(
-            doc(db, "processed_emails", emailDocId(clientId, uidStr)),
-            {
-              status: isExhausted ? "ai_exhausted" : "ai_failed",
-              aiAttempts: thisAttemptNo,
-              lastAttemptAt: new Date().toISOString(),
-            },
-            { merge: true },
-          );
-        } catch (_) {}
-
-        if (isExhausted) {
-          warn(
-            `${tag} UID ${uidStr} reached MAX_AI_ATTEMPTS (${MAX_AI_ATTEMPTS}) — permanently skipping`,
-          );
-          sessionUIDCache.add(uid);
-          await markEmailAsRead(connection, uid);
-        } else {
-          log(
-            `${tag}    ❌ AI attempt ${thisAttemptNo}/${MAX_AI_ATTEMPTS} failed — will retry next cycle`,
-          );
-        }
-        return;
-      }
     }
 
+    // ✅ FIX 6: Add to sessionUIDCache on parse failure.
+    // OLD BUG: returning without caching meant the same email was re-downloaded
+    // and re-attempted every 30 seconds within the same session, hammering
+    // Bedrock with repeated calls for emails that were already failing.
+    // FIX: Cache the UID so it's skipped for the rest of this session.
+    // On server restart / reconnect, sessionUIDCache resets — giving a fresh retry.
     if (!orderData) {
-      log(`${tag}    ❌ All parse paths failed — will retry next cycle`);
+      log(`${tag}    ❌ Parse failed — stays unread for retry`);
+      sessionUIDCache.add(uid); // ✅ FIX 6
       return;
     }
 
@@ -2183,7 +1956,7 @@ async function processEmail(
         );
         await markEmailAsRead(connection, uid);
 
-      // ── NEW ORDER → validate then save ──────────────────────────────────
+        // ── NEW ORDER → validate then save ────────────────────────────────
       } else {
         log(`${tag}    🆕 New order #${finalOrderNo} — validating fields...`);
         const missing = getMissingFields(orderData);
@@ -2197,6 +1970,8 @@ async function processEmail(
             "incomplete_data",
             clientId,
           );
+          // ✅ FIX 5: sessionUIDCache NOT updated here — allow retry next cycle.
+          // recordProcessedEmail also skips emailSet for 'incomplete_data'.
           return;
         }
 
@@ -2279,42 +2054,6 @@ async function pollClientInbox(
 
   let sessionUIDCache = new Set();
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // ✅ LAYER 2 — SOCKET-LEVEL ERROR/CLOSE LISTENERS
-  //
-  // Root cause of the original crash: node-imap (which imap-simple wraps)
-  // exposes the raw connection as an EventEmitter at `connection.imap`. If
-  // NOTHING is listening for its 'error' event and the socket drops (Gmail
-  // resets it, network blip, TLS renegotiation fails, etc.), Node's
-  // EventEmitter throws that error as an uncaught exception BY DESIGN.
-  // With no listener anywhere, it used to reach process.on('uncaughtException')
-  // as a total surprise and take the whole server down — every client's
-  // poller included, not just the one that disconnected.
-  //
-  // Fix: attach 'error' and 'close' listeners directly on connection.imap
-  // right after every successful connect (both initial connect AND every
-  // reconnect). Now the error is caught HERE FIRST, tagged with which
-  // client it belongs to, logged, and swallowed — never becomes an
-  // uncaughtException. The next scheduled cycle() call will naturally hit
-  // the dead connection, its own try/catch fails, and the EXISTING
-  // reconnect logic in cycle() takes over — so recovery is unchanged,
-  // just the crash risk is removed.
-  // ═══════════════════════════════════════════════════════════════════════
-  function attachSocketGuards(connection) {
-    try {
-      connection.imap.on("error", (imapErr) => {
-        warn(`${tag} [Layer 2] IMAP socket error (handled, no crash): ${imapErr.message}`);
-      });
-      connection.imap.on("close", (hadError) => {
-        if (!cancelled) {
-          warn(`${tag} [Layer 2] IMAP connection closed (hadError=${hadError})`);
-        }
-      });
-    } catch (e) {
-      warn(`${tag} Could not attach socket guards: ${e.message}`);
-    }
-  }
-
   async function runPollingCycle(connection) {
     if (cancelled) return;
     try {
@@ -2324,34 +2063,15 @@ async function pollClientInbox(
         return;
       }
 
-      // ✅ Production mode: only UNSEEN (unread) emails, wrapped in Layer 3
-      // timeout so IMAP_HANG (silent half-open socket) can never freeze
-      // this cycle forever.
-      //
-      // ✅ SERVER-SIDE SINCE FILTER (perf fix)
-      // Problem: without this, a newly-added client with hundreds of old
-      // unread emails would have EVERY one of them fully fetched (body +
-      // parsed) by processEmail's Guard 4, just to discover the date is
-      // too old and skip it. That's a full IMAP body transfer wasted per
-      // old email — slow first cycle for clients with big backlogs.
-      // Fix: push the date filter INTO the IMAP search itself. The server
-      // now excludes old emails before they're even transferred — no UID,
-      // no header, no body. clientCreatedAt is always defined once a
-      // client exists, so this is safe for every poll cycle, not just the
-      // first one.
-      // Note: IMAP's SINCE granularity is DAY-level, not time-of-day, so
-      // an email from earlier the SAME DAY the client was created can
-      // still pass this filter — Guard 4 in processEmail (which compares
-      // full timestamps) remains in place as the precise safety net.
-      const sinceDate = new Date(clientCreatedAt || Date.now());
-      const messages = await withTimeout(
-        connection.search(["UNSEEN", ["SINCE", sinceDate]], {
+      const messages = await Promise.race([
+        connection.search(["UNSEEN"], {
           bodies: ["HEADER.FIELDS (SUBJECT)"],
           markSeen: false,
         }),
-        15000,
-        "IMAP_HEADER_SEARCH",
-      );
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error("IMAP_HANG")), 15000),
+        ),
+      ]);
 
       const today = todayStr();
       const orderMap = getOrderMap(today, clientId);
@@ -2404,7 +2124,6 @@ async function pollClientInbox(
 
       connection = await imaps.connect(IMAP_CONFIG);
       activeConn = connection;
-      attachSocketGuards(connection); // ✅ Layer 2
       await connection.openBox("INBOX");
       sessionUIDCache = new Set();
       log(`${tag} ✅ Connected to inbox`);
@@ -2429,7 +2148,6 @@ async function pollClientInbox(
           try {
             connection = await imaps.connect(IMAP_CONFIG);
             activeConn = connection;
-            attachSocketGuards(connection); // ✅ Layer 2 — reattach on every reconnect
             await connection.openBox("INBOX");
             sessionUIDCache = new Set();
             log(`${tag} ✅ Reconnected`);
