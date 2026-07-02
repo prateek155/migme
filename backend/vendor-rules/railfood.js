@@ -28,6 +28,40 @@
  *        when paymentType=Prepaid and totalAmount=0.
  *        The "Total" footer row value (e.g. 357) is captured as _itemsTotal
  *        via a special selfContained field on the footer label.
+ *
+ * ── VERIFIED BUGS FIXED (2026-06-21) ────────────────────────────────────────
+ *
+ * BUG 3 — deliveryDate/deliveryTime always null (forces AI call EVERY order):
+ *   RailFood sends delivery date in TWO DIFFERENT FORMATS depending on the
+ *   order/outlet — confirmed from live .eml samples:
+ *     Format A (slash): "Delivery Date & Time : 6/21/2026 & 20:57"  → M/D/YYYY
+ *     Format B (dash):   "Delivery Date & Time : 21-06-2026 & 21:54" → DD-MM-YYYY
+ *   OLD regex only matched Format A (slash). Format B (dash) silently failed
+ *   to match at all → deliveryDate/deliveryTime always null for those orders →
+ *   getMissingFields() flagged them as missing → fillMissingFields() fired an
+ *   AI/Bedrock call on EVERY dash-format order just to read the date/time.
+ *   FIX: try slash format first (M/D/YYYY — month before day). If that fails,
+ *        try dash format (DD-MM-YYYY — day before month). The two formats use
+ *        OPPOSITE day/month ordering, so they are parsed as separate cases —
+ *        a single merged regex would silently swap day/month for ambiguous
+ *        dates (e.g. day ≤ 12) and produce a WRONG date instead of no date.
+ *
+ * BUG 4 — stray "Instructions :" row parsed as a fake item (qty=127, price=0):
+ *   RailFood's items table has a row that begins the footer section but whose
+ *   FIRST cell is "Instructions :" (in red) instead of being blank or a footer
+ *   label — e.g.:
+ *     <td style="color:red;">Instructions : </td>
+ *     <td colspan="2">Sub Total</td>
+ *     <td>127.00</td>
+ *   OLD footerLabels list did not include "Instructions", and footer-row
+ *   detection only checks cell[0]/cell[1] against footerLabels — so this row
+ *   was never recognized as a footer row. It fell through to item-row parsing:
+ *     itemName = "Instructions :" (cell 0)
+ *     price    = parseFloat("Sub Total") → NaN → 0
+ *     quantity = parseInt("127.00") → 127   (the Sub Total VALUE, misread as qty)
+ *   → a fake item "Instructions :  | 127" was pushed into every order's item list.
+ *   FIX: added "Instructions" to footerLabels so this row is now correctly
+ *        recognized and skipped before item-row parsing ever sees it.
  */
 
 const domConfig = {
@@ -77,9 +111,12 @@ const domConfig = {
       transform: v => v.trim() || null,
     },
 
+    // ── BUG 3 FIX: _deliveryRaw is captured RAW here — both date formats
+    // (slash "6/21/2026" and dash "21-06-2026") are parsed in postProcess,
+    // which branches on which separator is actually present in the string.
     _deliveryRaw: {
       labelText:     'Delivery Date',    // partial match covers "Delivery Date & Time"
-      selfContained: true,               // "Delivery Date & Time : 6/1/2026 & 08:17" — same cell
+      selfContained: true,               // "Delivery Date & Time : 6/21/2026 & 20:57" — same cell
       transform: v => v.trim(),
     },
 
@@ -119,7 +156,10 @@ const domConfig = {
 
     itemCellSplit: 'br',
 
-    footerLabels: ['Sub Total', 'Delivery Fee', 'GST', 'Total'],
+    // ── BUG 4 FIX: "Instructions" added so the stray red "Instructions :" row
+    // (which precedes "Sub Total" in the same footer block) is recognized as
+    // a footer/skip row instead of falling through to item-row parsing.
+    footerLabels: ['Instructions', 'Sub Total', 'Delivery Fee', 'GST', 'Total'],
 
     // ── BUG 2 FIX ───────────────────────────────────────────────────────────
     // When parseDomOrder hits the 'Total' footer row, capture its value as
@@ -128,17 +168,36 @@ const domConfig = {
   },
 
   postProcess(order) {
-    // ── Split _deliveryRaw "6/1/2026 & 08:17" → deliveryDate + deliveryTime ──
+    // ── BUG 3 FIX: parse _deliveryRaw → deliveryDate + deliveryTime ─────────
+    // RailFood sends TWO different date formats depending on the order:
+    //   Format A (slash): "6/21/2026 & 20:57"  → M/D/YYYY  (month FIRST)
+    //   Format B (dash):   "21-06-2026 & 21:54" → DD-MM-YYYY (day FIRST)
+    // These are tried as SEPARATE cases (not a merged regex) because the
+    // day/month capture-group order is OPPOSITE between the two formats —
+    // a single combined regex would silently swap day/month whenever the
+    // day is ≤ 12, producing a wrong date instead of failing safely.
     const raw = order._deliveryRaw || '';
-    const m = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s*[&]\s*(\d{1,2}:\d{2}))?/);
+    let deliveryDate = null;
+    let deliveryTime = null;
+
+    // Try Format A first: M/D/YYYY (slash-separated)
+    let m = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s*[&]\s*(\d{1,2}:\d{2}))?/);
     if (m) {
       const [, mo, dd, yyyy, time] = m;
-      order.deliveryDate = `${yyyy}-${mo.padStart(2,'0')}-${dd.padStart(2,'0')}`;
-      order.deliveryTime = time ? (time.length === 4 ? '0' + time : time) : null;
+      deliveryDate = `${yyyy}-${mo.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+      deliveryTime = time ? (time.length === 4 ? '0' + time : time) : null;
     } else {
-      order.deliveryDate = null;
-      order.deliveryTime = null;
+      // Try Format B: DD-MM-YYYY (dash-separated)
+      m = raw.match(/(\d{1,2})-(\d{1,2})-(\d{4})(?:\s*[&]\s*(\d{1,2}:\d{2}))?/);
+      if (m) {
+        const [, dd, mo, yyyy, time] = m;
+        deliveryDate = `${yyyy}-${mo.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+        deliveryTime = time ? (time.length === 4 ? '0' + time : time) : null;
+      }
     }
+
+    order.deliveryDate = deliveryDate;
+    order.deliveryTime = deliveryTime;
     delete order._deliveryRaw;
 
     // ── BUG 2 FIX: use items Total for Prepaid orders ────────────────────────
@@ -155,34 +214,6 @@ const domConfig = {
     return order;
   },
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// parseDomOrder backend.js changes required for these fixes:
-//
-// CHANGE 1 — selfContained field support:
-//   In the fields loop, after finding the label <td>:
-//   if (cfg.selfContained) {
-//     // Extract value from label td's own text via regex (first number sequence)
-//     const ownText = $(el).text().replace(/\s+/g,' ').trim();
-//     const numMatch = ownText.match(/[\d]+$/);   // last number in the td text
-//     rawValue = numMatch ? numMatch[0] : null;
-//   } else {
-//     // Original: read next sibling td
-//     const sibling = $(el).next('td');
-//     if (sibling.length) rawValue = sibling.text()...
-//   }
-//
-// CHANGE 2 — captureFooterTotal support:
-//   In the footer detection block, when a footerLabel is matched:
-//   if (domConfig.itemsTable.captureFooterTotal) {
-//     const footerLabel = domConfig.itemsTable.captureFooterTotal;
-//     if (secondText.toLowerCase().includes(footerLabel.toLowerCase())) {
-//       // Capture the value from the last td in this footer row
-//       const lastCell = cells.last();
-//       order._itemsTotal = parseFloat(lastCell.text().replace(/[^\d.]/g,'')) || 0;
-//     }
-//   }
-// ─────────────────────────────────────────────────────────────────────────────
 
 const matchers = [
   { match: 'relfood',  name: 'Rail Food', type: 'railfood' },
@@ -204,6 +235,7 @@ ITEMS TABLE: Item | Price | Quantity | Total
   Each item td has name + description separated by <br>.
   Quantity = 3rd column (never the description).
   DO NOT verify Price × Qty = Total (RailFood billing bug: Total always = unit Price).
+  IGNORE any row starting with "Instructions :" — it is a footer/notes row, not an item.
 
 TOTAL:
   COD orders:     use "Payment to collect" as totalAmount.
@@ -211,7 +243,10 @@ TOTAL:
   e.g. Sub Total=340, GST=17, Total=357 → totalAmount=357 for Prepaid orders.
 
 - COACH: "Coach/Seat" field e.g. "H1/C/8"
-- DATE: "Delivery Date & Time: 6/1/2026 & 08:17" → deliveryDate=2026-06-01, deliveryTime=08:17
+- DATE: "Delivery Date & Time" appears in TWO possible formats — check which separator is used:
+    Slash format: "6/21/2026 & 20:57" → M/D/YYYY → deliveryDate=2026-06-21, deliveryTime=20:57
+    Dash format:  "21-06-2026 & 21:54" → DD-MM-YYYY → deliveryDate=2026-06-21, deliveryTime=21:54
+  Never assume one format — detect the separator (/ or -) and parse day/month accordingly.
 - TRAIN: "Train No./Name"
 - CONTACT: first 10-digit number, strip +91/91 prefix
 - PAYMENT: "COD"→"COD", "PAID"/"PRE_PAID"/"PAID"→"Prepaid"`;
