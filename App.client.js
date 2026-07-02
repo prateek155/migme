@@ -25,43 +25,11 @@ const SIDEBAR_COLLAPSED = 56;
 const MOBILE_BP         = 768;
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─── URL <-> Screen mapping (web only) ────────────────────────────────────────
-// This is what makes the browser URL change per-screen and makes the
-// browser Back/Forward buttons work correctly.
-const SCREEN_PATHS = {
-  Dashboard:      '/dashboard',
-  'Add Order':    '/add-order',
-  Menu:           '/menu',
-  Reports:        '/reports',
-  Delivered:      '/delivered',
-  Cancelled:      '/cancelled',
-  'Delivery Team':'/delivery-team',
-  Settings:       '/settings',
-};
-const PATH_SCREENS = Object.fromEntries(
-  Object.entries(SCREEN_PATHS).map(([screen, path]) => [path, screen])
-);
-const isWeb = Platform.OS === 'web' && typeof window !== 'undefined';
-// ─────────────────────────────────────────────────────────────────────────────
-
 export default function App() {
   const [user, setUser]                       = useState(null);
   const [loading, setLoading]                 = useState(true);
-  const [showHome, setShowHome]               = useState(() => {
-    // On web, if someone loads/refreshes directly on /login, show the
-    // login screen instead of always defaulting back to the homepage.
-    if (isWeb && window.location.pathname === '/login') return false;
-    return true;
-  });
-  const [currentScreen, setCurrentScreen]     = useState(() => {
-    // On web, prefer whatever the URL says (handles refresh, direct links,
-    // and initial back/forward) before falling back to localStorage.
-    if (isWeb) {
-      const screenFromPath = PATH_SCREENS[window.location.pathname];
-      if (screenFromPath) return screenFromPath;
-    }
-    return localStorage.getItem('current_screen') || 'Dashboard';
-  });
+  const [showHome, setShowHome]               = useState(true);
+  const [currentScreen, setCurrentScreen]     = useState(() => localStorage.getItem('current_screen') || 'Dashboard');
   const [dailyBizVisible, setDailyBizVisible] = useState(false);
 
   // Sidebar collapsed state (desktop only)
@@ -88,8 +56,11 @@ export default function App() {
   }, [collapsed, isMobile]);
 
   // ── Animate mobile sidebar + overlay ──
+  // On mobile: collapsed = SIDEBAR_COLLAPSED (56px icon strip always visible)
+  // On mobile open: SIDEBAR_EXPANDED (240px) floats over content with overlay
   useEffect(() => {
     if (!isMobile) {
+      // Reset mobile state when switching back to desktop
       setMobileSidebarOpen(false);
       overlayAnim.setValue(0);
       sidebarAnim.setValue(collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED);
@@ -109,6 +80,7 @@ export default function App() {
     ]).start();
   }, [mobileSidebarOpen, isMobile]);
 
+  // Label / logo text opacity — fade out when collapsed (desktop) or mobile closed
   const labelOpacity = sidebarAnim.interpolate({
     inputRange: [SIDEBAR_COLLAPSED, SIDEBAR_EXPANDED],
     outputRange: [0, 1],
@@ -125,59 +97,6 @@ export default function App() {
 
   const closeMobile = () => setMobileSidebarOpen(false);
 
-  // ─── Pre-login navigation (Home <-> Login) ────────────────────────────────
-  // Same idea as navigateToScreen, but for the two screens that exist
-  // before a user is logged in, so /login gets its own URL and Back works.
-  const goToLogin = () => {
-    setShowHome(false);
-    if (isWeb && window.location.pathname !== '/login') {
-      window.history.pushState({}, '', '/login');
-    }
-  };
-
-  const goToHome = () => {
-    setShowHome(true);
-    if (isWeb && window.location.pathname !== '/') {
-      window.history.pushState({}, '', '/');
-    }
-  };
-
-  // ─── Central navigation helper ────────────────────────────────────────────
-  // Use this instead of calling setCurrentScreen directly anywhere in the app.
-  // It keeps state, localStorage, and the browser URL/history all in sync.
-  const navigateToScreen = (screen, { replace = false } = {}) => {
-    setCurrentScreen(screen);
-    localStorage.setItem('current_screen', screen);
-    if (isWeb) {
-      const path = SCREEN_PATHS[screen] || '/dashboard';
-      if (window.location.pathname !== path) {
-        if (replace) {
-          window.history.replaceState({ screen }, '', path);
-        } else {
-          window.history.pushState({ screen }, '', path);
-        }
-      }
-    }
-    closeMobile();
-  };
-
-  // ─── Handle browser Back / Forward buttons ────────────────────────────────
-  useEffect(() => {
-    if (!isWeb) return;
-    const handlePopState = () => {
-      // Before login: only Home ("/") and Login ("/login") exist.
-      if (!user) {
-        setShowHome(window.location.pathname !== '/login');
-        return;
-      }
-      const screen = PATH_SCREENS[window.location.pathname] || 'Dashboard';
-      setCurrentScreen(screen);
-      localStorage.setItem('current_screen', screen);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [user]);
-
   // ─── Session restore ─────────────────────────────────────────────────────
   useEffect(() => {
     const loadSession = async () => {
@@ -185,20 +104,11 @@ export default function App() {
         const userData = await AsyncStorage.getItem('migme_user');
         if (userData) {
           setUser(JSON.parse(userData));
-          // Once we know the user is logged in, make sure the URL matches
-          // whatever screen we resolved above (covers a fresh "/" load).
-          if (isWeb) {
-            const path = SCREEN_PATHS[currentScreen] || '/dashboard';
-            if (window.location.pathname !== path) {
-              window.history.replaceState({ screen: currentScreen }, '', path);
-            }
-          }
         }
       } catch (e) { console.error('App.js loadSession error:', e); }
       setLoading(false);
     };
     loadSession();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ✅ FIXED
@@ -206,8 +116,6 @@ export default function App() {
     setUser(userData);
     await AsyncStorage.setItem('migme_user', JSON.stringify(userData));
     await AsyncStorage.setItem('migme_role', userRole || 'client');
-    // Land on the dashboard with a proper URL right after login.
-    navigateToScreen('Dashboard', { replace: true });
   };
 
   const handleLogout = async () => {
@@ -216,9 +124,6 @@ export default function App() {
     setCurrentScreen('Dashboard');
     localStorage.removeItem('current_screen');
     setMobileSidebarOpen(false);
-    if (isWeb) {
-      window.history.replaceState({}, '', '/');
-    }
     try { await signOut(auth); } catch (_) {}
     await AsyncStorage.removeItem('migme_user');
     await AsyncStorage.removeItem('migme_role');
@@ -236,7 +141,7 @@ export default function App() {
   // ─── No user: home page first, then login ────────────────────────────────
   if (!user) {
     if (showHome) {
-      return <HomepageScreen onLogin={goToLogin} onSignup={goToLogin} />;
+      return <HomepageScreen onLogin={() => setShowHome(false)} onSignup={() => setShowHome(false)} />;
     }
     return (
       <View style={{ flex: 1 }}>
@@ -247,9 +152,16 @@ export default function App() {
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ─── Shared sidebar shell ─────────────────────────────────────────────────
+  // On mobile:
+  //   - Sidebar is always inline (never hides) at SIDEBAR_COLLAPSED width (56px)
+  //   - When opened it animates to SIDEBAR_EXPANDED and floats (absolute) over content
+  //   - A dim overlay covers the content; tapping it closes the sidebar
+  // On desktop:
+  //   - Sidebar is always inline, animates between collapsed/expanded
   // ═══════════════════════════════════════════════════════════════════════════
   const SidebarShell = ({ bgColor, borderColor, children }) => (
     <>
+      {/* Mobile dim overlay — rendered only when sidebar is open */}
       {isMobile && mobileSidebarOpen && (
         <Animated.View
           pointerEvents="auto"
@@ -268,6 +180,8 @@ export default function App() {
             width: sidebarAnim,
             backgroundColor: bgColor,
             borderRightColor: borderColor,
+            // On mobile when OPEN: float absolute over content
+            // On mobile when CLOSED: stay inline as 56px icon strip
             ...(isMobile && mobileSidebarOpen ? {
               position: 'absolute',
               left: 0,
@@ -296,13 +210,13 @@ export default function App() {
   const renderClientContent = () => {
     switch (currentScreen) {
       case 'Dashboard':     return <DashboardScreen clientId={clientId} />;
-      case 'Add Order':     return <AddOrderScreen onNavigate={navigateToScreen} clientId={clientId} />;
+      case 'Add Order':     return <AddOrderScreen onNavigate={setCurrentScreen} clientId={clientId} />;
       case 'Menu':          return <MenuScreen clientId={clientId} />;
       case 'Reports':       return <ReportsScreen clientId={clientId} />;
       case 'Delivered':     return <FilteredOrdersScreen statusFilter="Completed" title="Delivered Orders" clientId={clientId} />;
       case 'Cancelled':     return <FilteredOrdersScreen statusFilter="Cancelled" title="Cancelled Orders" clientId={clientId} />;
       case 'Delivery Team': return <DeliveryExecutiveScreen clientId={clientId} />;
-      case 'Settings':      return <ClientSettingsScreen clientId={clientId} clientEmail={user?.email || ''} onNavigate={navigateToScreen} />;
+      case 'Settings':      return <ClientSettingsScreen clientId={clientId} clientEmail={user?.email || ''} onNavigate={setCurrentScreen} />;
       default:              return <DashboardScreen clientId={clientId} />;
     }
   };
@@ -312,7 +226,7 @@ export default function App() {
     return (
       <TouchableOpacity
         style={[styles.navItem, isActive && styles.navItemActiveWhite]}
-        onPress={() => navigateToScreen(screen)}
+        onPress={() => { setCurrentScreen(screen); localStorage.setItem('current_screen', screen); closeMobile(); }}
         activeOpacity={0.75}
       >
         {isActive && <View style={[styles.activePill, { backgroundColor: '#4ade80' }]} />}
@@ -384,7 +298,7 @@ export default function App() {
 
             <TouchableOpacity
               style={styles.navItem}
-              onPress={handleLogout}
+              onPress={() => { handleLogout(); closeMobile(); }}
               activeOpacity={0.75}
             >
               <Ionicons name="log-out-outline" size={26} color="#ef4444" />
