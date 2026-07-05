@@ -589,13 +589,16 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CLIENTS  (email-polling clients — used by watchClients() / IMAP pollers)
+// ═══════════════════════════════════════════════════════════════════════════
 app.post("/api/clients", rateLimit(5), requireAdmin, async (req, res) => {
   try {
-    const { businessName, email, appPassword, password } = req.body;
-    if (!businessName || !email || !appPassword || !password) {
+    const { businessName, address, email, appPassword, password } = req.body;
+    if (!businessName || !address || !email || !appPassword || !password) {
       return res.status(400).json({
         error:
-          "Missing required fields: businessName, email, appPassword, password",
+          "Missing required fields: businessName, address, email, appPassword, password",
       });
     }
     const encryptedAppPassword = encrypt(appPassword);
@@ -603,6 +606,7 @@ app.post("/api/clients", rateLimit(5), requireAdmin, async (req, res) => {
     const clientEmail = email.trim().toLowerCase();
     const docRef = await addDoc(collection(db, "clients"), {
       businessName: businessName.trim(),
+      address: address.trim(),
       email: clientEmail,
       appPassword: encryptedAppPassword,
       passwordHash,
@@ -807,6 +811,235 @@ app.delete("/api/data/client/:clientId/all", requireAdmin, async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BILLING / SUBSCRIPTION CLIENTS  (ClientManagement dashboard)
+// Separate Firestore collections ("billing_clients", "billing_payments") —
+// intentionally NOT the "clients" collection above, which the email-polling
+// system (watchClients()) watches and depends on. Keeping these separate
+// means nothing here can ever trigger/break an IMAP poller.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── List all billing clients ────────────────────────────────────────────
+app.get("/api/billing-clients", requireAdmin, async (req, res) => {
+  try {
+    const snap = await getDocs(collection(db, "billing_clients"));
+    const out = [];
+    snap.forEach((d) => out.push({ id: d.id, ...d.data() }));
+    res.json(out);
+  } catch (e) {
+    warn(`GET /api/billing-clients error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Create billing client ───────────────────────────────────────────────
+app.post("/api/billing-clients", rateLimit(20), requireAdmin, async (req, res) => {
+  try {
+    const {
+      clientName,
+      restaurantName,
+      phone,
+      email,
+      state,
+      city,
+      startDate,
+      priceType,
+      amount,
+      notes,
+      gst,
+    } = req.body;
+
+    if (
+      !clientName ||
+      !restaurantName ||
+      !phone ||
+      !state ||
+      !city ||
+      !startDate ||
+      !priceType ||
+      !amount
+    ) {
+      return res.status(400).json({
+        error:
+          "Missing required fields: clientName, restaurantName, phone, state, city, startDate, priceType, amount",
+      });
+    }
+
+    const docRef = await addDoc(collection(db, "billing_clients"), {
+      clientName: clientName.trim(),
+      restaurantName: restaurantName.trim(),
+      phone: phone.trim(),
+      email: (email || "").trim().toLowerCase(),
+      state,
+      city,
+      startDate,
+      priceType,
+      amount: Number(amount),
+      notes: notes || "",
+      gst: gst || "",
+      active: true,
+      createdAt: new Date().toISOString(),
+    });
+
+    log(`Billing client created: ${restaurantName} (${docRef.id})`);
+    const saved = await getDoc(docRef);
+    res.json({ id: docRef.id, ...saved.data() });
+  } catch (e) {
+    warn(`POST /api/billing-clients error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Update billing client ───────────────────────────────────────────────
+app.put("/api/billing-clients/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ref = doc(db, "billing_clients", id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      return res.status(404).json({ error: "Client not found" });
+    }
+
+    const {
+      clientName,
+      restaurantName,
+      phone,
+      email,
+      state,
+      city,
+      startDate,
+      priceType,
+      amount,
+      notes,
+      gst,
+    } = req.body;
+
+    const updatePayload = {
+      ...(clientName !== undefined && { clientName: clientName.trim() }),
+      ...(restaurantName !== undefined && { restaurantName: restaurantName.trim() }),
+      ...(phone !== undefined && { phone: phone.trim() }),
+      ...(email !== undefined && { email: (email || "").trim().toLowerCase() }),
+      ...(state !== undefined && { state }),
+      ...(city !== undefined && { city }),
+      ...(startDate !== undefined && { startDate }),
+      ...(priceType !== undefined && { priceType }),
+      ...(amount !== undefined && { amount: Number(amount) }),
+      ...(notes !== undefined && { notes }),
+      ...(gst !== undefined && { gst }),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await updateDoc(ref, updatePayload);
+    const updated = await getDoc(ref);
+    log(`Billing client updated: ${id}`);
+    res.json({ id, ...updated.data() });
+  } catch (e) {
+    warn(`PUT /api/billing-clients/:id error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Toggle active/inactive ──────────────────────────────────────────────
+app.patch("/api/billing-clients/:id/toggle", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ref = doc(db, "billing_clients", id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      return res.status(404).json({ error: "Client not found" });
+    }
+    const newActive = !snap.data().active;
+    await updateDoc(ref, { active: newActive, updatedAt: new Date().toISOString() });
+    log(`Billing client ${id} active=${newActive}`);
+    res.json({ id, active: newActive });
+  } catch (e) {
+    warn(`PATCH /api/billing-clients/:id/toggle error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Delete billing client (+ cascade delete their payments) ────────────
+app.delete("/api/billing-clients/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ref = doc(db, "billing_clients", id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      return res.status(404).json({ error: "Client not found" });
+    }
+    await deleteDoc(ref);
+
+    const paySnap = await getDocs(
+      query(collection(db, "billing_payments"), where("clientId", "==", id)),
+    );
+    let deletedPayments = 0;
+    for (const d of paySnap.docs) {
+      await deleteDoc(doc(db, "billing_payments", d.id));
+      deletedPayments++;
+    }
+
+    log(`Billing client deleted: ${id} (+ ${deletedPayments} payment record(s))`);
+    res.json({ deleted: id, deletedPayments });
+  } catch (e) {
+    warn(`DELETE /api/billing-clients/:id error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── List payments (optionally filter by clientId) ───────────────────────
+app.get("/api/billing-payments", requireAdmin, async (req, res) => {
+  try {
+    const { clientId } = req.query;
+    let snap;
+    if (clientId) {
+      snap = await getDocs(
+        query(collection(db, "billing_payments"), where("clientId", "==", clientId)),
+      );
+    } else {
+      snap = await getDocs(collection(db, "billing_payments"));
+    }
+    const out = [];
+    snap.forEach((d) => out.push({ id: d.id, ...d.data() }));
+    res.json(out);
+  } catch (e) {
+    warn(`GET /api/billing-payments error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Record a payment ─────────────────────────────────────────────────────
+app.post("/api/billing-payments", rateLimit(20), requireAdmin, async (req, res) => {
+  try {
+    const { clientId, amount, date, note, mode } = req.body;
+    if (!clientId || !amount || Number(amount) <= 0 || !date) {
+      return res.status(400).json({
+        error: "Missing required fields: clientId, amount, date",
+      });
+    }
+    const clientRef = doc(db, "billing_clients", clientId);
+    const clientSnap = await getDoc(clientRef);
+    if (!clientSnap.exists()) {
+      return res.status(404).json({ error: "Client not found" });
+    }
+
+    const docRef = await addDoc(collection(db, "billing_payments"), {
+      clientId,
+      amount: Number(amount),
+      date,
+      note: note || "",
+      mode: mode || "cash",
+      createdAt: new Date().toISOString(),
+    });
+
+    log(`Billing payment recorded: ${docRef.id} for client ${clientId} — ₹${amount}`);
+    const saved = await getDoc(docRef);
+    res.json({ id: docRef.id, ...saved.data() });
+  } catch (e) {
+    warn(`POST /api/billing-payments error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => log(`MIGME Backend running on port ${PORT}`));
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -848,6 +1081,56 @@ function withTimeout(promise, ms, label) {
 // ✅ AI ATTEMPT LIMIT
 // ═══════════════════════════════════════════════════════════════════════════
 const MAX_AI_ATTEMPTS = 5;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ✅ GLOBAL BEDROCK CONCURRENCY LIMITER
+//
+// Problem: with N clients each processing batches of up to BATCH_SIZE emails
+// in parallel, the number of SIMULTANEOUS Bedrock calls scales with N — e.g.
+// 15 clients × 3 = up to 45 concurrent calls. AWS Bedrock has per-account
+// rate/concurrency limits; hitting them causes calls to fail, which feeds
+// straight into the retry/backoff path and stacks up delay across cycles —
+// exactly the kind of "works with 2 clients, breaks at 15" scaling failure.
+//
+// Fix: a simple counting semaphore. Every Bedrock call (new-order parse,
+// update parse, missing-field fill) acquires a slot first. Only
+// MAX_CONCURRENT_AI calls run at once system-wide; everything else queues
+// and runs as soon as a slot frees up — no calls are ever rejected outright,
+// they just wait their turn instead of all firing at once and tripping
+// AWS-side throttling.
+// ═══════════════════════════════════════════════════════════════════════════
+const MAX_CONCURRENT_AI = 6;
+let _aiActiveCount = 0;
+const _aiWaitQueue = [];
+
+function acquireAISlot() {
+  return new Promise((resolve) => {
+    const tryAcquire = () => {
+      if (_aiActiveCount < MAX_CONCURRENT_AI) {
+        _aiActiveCount++;
+        resolve();
+      } else {
+        _aiWaitQueue.push(tryAcquire);
+      }
+    };
+    tryAcquire();
+  });
+}
+
+function releaseAISlot() {
+  _aiActiveCount--;
+  const next = _aiWaitQueue.shift();
+  if (next) next();
+}
+
+async function withAISlot(fn) {
+  await acquireAISlot();
+  try {
+    return await fn();
+  } finally {
+    releaseAISlot();
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // VENDOR REGISTRY
@@ -968,27 +1251,75 @@ function parseLineBasedOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     const itemsCfg = domConfig.lineBasedItems;
     if (itemsCfg) {
       let inItems = false;
-      for (const line of lines) {
-        if (!inItems) {
-          const _startHit = typeof itemsCfg.startMarker === "string"
-            ? line.toUpperCase().includes(itemsCfg.startMarker.toUpperCase())
-            : itemsCfg.startMarker.test(line);
-          if (_startHit) {
-            inItems = true;
-          }
-          continue;
-        }
-        if (itemsCfg.endMarker.test(line)) break;
-        if (itemsCfg.skipPattern && itemsCfg.skipPattern.test(line)) continue;
 
-        const m = line.match(itemsCfg.itemLineMatch);
-        if (m) {
-          const nameGroup = itemsCfg.nameGroup || 1;
-          const qtyGroup = itemsCfg.qtyGroup || 2;
-          const name = m[nameGroup].trim();
-          const qty = parseInt(m[qtyGroup], 10) || 1;
-          items.push({ name, quantity: qty, price: 0 });
-          log(`${tag}      DOM item (line-based): "${name}" × ${qty}`);
+      // ✅ NEW — "stride" mode: for vendors whose HTML flattens each table
+      // cell onto its own line, so one item spans N consecutive lines
+      // (e.g. name, price, qty, total) instead of one combined line.
+      // Activated only when the vendor config sets groupSize + columns —
+      // vendors using the original single-line itemLineMatch are untouched.
+      if (itemsCfg.groupSize && Array.isArray(itemsCfg.columns)) {
+        let buffer = [];
+        for (const line of lines) {
+          if (!inItems) {
+            const _startHit = typeof itemsCfg.startMarker === "string"
+              ? line.toUpperCase().includes(itemsCfg.startMarker.toUpperCase())
+              : itemsCfg.startMarker.test(line);
+            if (_startHit) {
+              inItems = true;
+            }
+            continue;
+          }
+          if (itemsCfg.endMarker.test(line)) break;
+          if (itemsCfg.skipPattern && itemsCfg.skipPattern.test(line)) continue;
+
+          buffer.push(line);
+          if (buffer.length === itemsCfg.groupSize) {
+            const row = {};
+            itemsCfg.columns.forEach((col, i) => {
+              row[col] = buffer[i];
+            });
+            const name = (row.name || "").trim();
+            const qty = parseInt((row.qty || "").replace(/[^\d]/g, ""), 10) || 1;
+            const price = itemsCfg.priceFromTotal
+              ? cleanFloat(row.total) / qty
+              : cleanFloat(row.price);
+            if (name) {
+              items.push({
+                name,
+                quantity: qty,
+                price: Math.round(price * 100) / 100,
+              });
+              log(
+                `${tag}      DOM item (line-based/stride): "${name}" ₹${price} × ${qty}`,
+              );
+            }
+            buffer = [];
+          }
+        }
+      } else {
+        // Original single-line-per-item path — unchanged.
+        for (const line of lines) {
+          if (!inItems) {
+            const _startHit = typeof itemsCfg.startMarker === "string"
+              ? line.toUpperCase().includes(itemsCfg.startMarker.toUpperCase())
+              : itemsCfg.startMarker.test(line);
+            if (_startHit) {
+              inItems = true;
+            }
+            continue;
+          }
+          if (itemsCfg.endMarker.test(line)) break;
+          if (itemsCfg.skipPattern && itemsCfg.skipPattern.test(line)) continue;
+
+          const m = line.match(itemsCfg.itemLineMatch);
+          if (m) {
+            const nameGroup = itemsCfg.nameGroup || 1;
+            const qtyGroup = itemsCfg.qtyGroup || 2;
+            const name = m[nameGroup].trim();
+            const qty = parseInt(m[qtyGroup], 10) || 1;
+            items.push({ name, quantity: qty, price: 0 });
+            log(`${tag}      DOM item (line-based): "${name}" × ${qty}`);
+          }
         }
       }
     }
@@ -997,6 +1328,21 @@ function parseLineBasedOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     if (items.length === 0) {
       warn(`${tag} ⚠ line-based DOM parse found 0 items — returning null to trigger AI fallback`);
       return null;
+    }
+
+    // ✅ NEW — label→next-line footer capture (e.g. "Payable Total:" on one
+    // line, "Rs. 792.75" on the next). Mirrors captureFooterTotal from the
+    // cheerio table path, adapted for flattened line-based vendors.
+    if (domConfig.lineBasedFooter) {
+      order._footerCaptures = order._footerCaptures || {};
+      for (const [captureName, cfg] of Object.entries(domConfig.lineBasedFooter)) {
+        for (let i = 0; i < lines.length - 1; i++) {
+          if (cfg.label.test(lines[i])) {
+            order._footerCaptures[captureName] = cleanFloat(lines[i + 1]);
+            break;
+          }
+        }
+      }
     }
 
     let finalOrder = order;
@@ -1382,24 +1728,31 @@ async function callBedrockAI(prompt) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AI — RETRY WITH EXPONENTIAL BACKOFF
+// ✅ Now wrapped in the global AI concurrency slot (withAISlot) so it never
+// fires more than MAX_CONCURRENT_AI calls at once across ALL clients —
+// prevents AWS Bedrock throttling as client count scales up.
+// ✅ Backoff shortened (was attempt*4000 = up to 8s between tries) so a
+// failing call doesn't eat into the 1-2 min delivery budget as much.
 // ═══════════════════════════════════════════════════════════════════════════
 async function callBedrockWithRetry(prompt, maxRetries = 3) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const result = await callBedrockAI(prompt);
-      if (result) return result;
-      warn(`AI attempt ${attempt}/${maxRetries} returned null`);
-    } catch (e) {
-      warn(`AI attempt ${attempt}/${maxRetries} threw: ${e.message}`);
+  return withAISlot(async () => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await callBedrockAI(prompt);
+        if (result) return result;
+        warn(`AI attempt ${attempt}/${maxRetries} returned null`);
+      } catch (e) {
+        warn(`AI attempt ${attempt}/${maxRetries} threw: ${e.message}`);
+      }
+      if (attempt < maxRetries) {
+        const backoff = attempt * 2000;
+        warn(`Backing off ${backoff / 1000}s before retry...`);
+        await delay(backoff);
+      }
     }
-    if (attempt < maxRetries) {
-      const backoff = attempt * 4000;
-      warn(`Backing off ${backoff / 1000}s before retry...`);
-      await delay(backoff);
-    }
-  }
-  err("All AI retry attempts exhausted");
-  return null;
+    err("All AI retry attempts exhausted");
+    return null;
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2253,6 +2606,17 @@ async function pollClientInbox(
   let isPaused = false;
   let blockedSenders = [];
 
+  // ✅ Prevents overlapping cycle() runs — the IDLE 'mail' event can fire
+  // while a scheduled/fallback cycle() is already mid-flight (e.g. busy
+  // with Firestore/Bedrock calls). Without this guard, two cycle() calls
+  // could both grab the same IMAP connection at once and corrupt state.
+  let cycleRunning = false;
+
+  // ✅ Debounce for the IDLE 'mail' event — Gmail can fire several 'mail'
+  // events in a burst (e.g. multiple emails arriving together). Without
+  // debouncing, each one would trigger its own immediate cycle() call.
+  let idleDebounceTimer = null;
+
   async function refreshClientSettings() {
     try {
       const snap = await getDoc(doc(db, "clients", clientId));
@@ -2274,6 +2638,11 @@ async function pollClientInbox(
       tls: true,
       authTimeout: 5000,
       tlsOptions: { rejectUnauthorized: false },
+      keepalive: {
+        interval: 10000,
+        idleInterval: 300000,
+        forceNoop: true,
+      },
     },
   };
 
@@ -2312,6 +2681,44 @@ async function pollClientInbox(
       });
     } catch (e) {
       warn(`${tag} Could not attach socket guards: ${e.message}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ✅ FIX #1 — IMAP IDLE: PUSH-BASED INSTANT DELIVERY
+  //
+  // Problem: the old design relied ENTIRELY on setTimeout(cycle, 30000) —
+  // a fixed 30s poll. Best case delay was 0-30s; worst case (AI retries,
+  // reconnects) stretched into minutes. This scaled the SAME regardless of
+  // client count, but never gave a real "always fast" guarantee.
+  //
+  // Fix: node-imap (which imap-simple wraps) exposes a 'mail' event on the
+  // raw connection.imap object — this fires the moment Gmail's IMAP server
+  // pushes a new-mail notification (this is what IMAP IDLE is *for*).
+  // Instead of waiting for the next scheduled poll, we run a cycle()
+  // IMMEDIATELY when this event fires. Delivery becomes near-instant
+  // (seconds) instead of tied to a fixed interval.
+  //
+  // The scheduled setTimeout(cycle, ...) below is KEPT as a fallback safety
+  // net (shortened to 20s) — in case a push notification is ever missed,
+  // the fallback still guarantees a check well within the "never more than
+  // 1-2 min" target.
+  // ═══════════════════════════════════════════════════════════════════════
+  function attachMailListener(connection, cycleFn) {
+    try {
+      connection.imap.on("mail", (numNewMsgs) => {
+        if (cancelled) return;
+        log(`${tag} 📬 IMAP push: ${numNewMsgs} new message signal — triggering immediate check`);
+        if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
+        // Small debounce (1.5s) to let a burst of 'mail' events settle
+        // into a single cycle() call instead of firing one per email.
+        idleDebounceTimer = setTimeout(() => {
+          idleDebounceTimer = null;
+          cycleFn();
+        }, 1500);
+      });
+    } catch (e) {
+      warn(`${tag} Could not attach mail listener: ${e.message}`);
     }
   }
 
@@ -2363,6 +2770,13 @@ async function pollClientInbox(
       if (newMessages.length > 0)
         log(`${tag} 📩 ${newMessages.length} email(s) to process`);
 
+      // ✅ Adaptive batch delay — the old fixed 2000ms gap between every
+      // batch of 3 added up fast on a busy inbox (e.g. 9 emails = 2 gaps =
+      // 4s of pure waiting, on top of AI/DOM processing time). Bedrock
+      // calls are now globally slot-limited (MAX_CONCURRENT_AI) instead,
+      // so batches no longer need to be artificially spaced out to protect
+      // AWS — the delay here is now just a light breather for very large
+      // batches, and is skipped entirely for small ones.
       const BATCH_SIZE = 3;
       for (let i = 0; i < newMessages.length; i += BATCH_SIZE) {
         if (cancelled) break;
@@ -2382,7 +2796,8 @@ async function pollClientInbox(
             ),
           ),
         );
-        if (i + BATCH_SIZE < newMessages.length) await delay(2000);
+        const remaining = newMessages.length - (i + BATCH_SIZE);
+        if (remaining > 0) await delay(remaining > 6 ? 1500 : 500);
       }
     } catch (e) {
       err(`${tag} Cycle error: ${e.message}`);
@@ -2409,6 +2824,10 @@ async function pollClientInbox(
       sessionUIDCache = new Set();
       log(`${tag} ✅ Connected to inbox`);
 
+      // ✅ Wraps runPollingCycle with the overlap guard — used by BOTH the
+      // scheduled fallback timer AND the IDLE 'mail' event listener, so
+      // only one cycle ever runs at a time for this client regardless of
+      // which trigger fired it.
       async function cycle() {
         if (cancelled) {
           log(`${tag} Polling cancelled — closing IMAP connection`);
@@ -2418,10 +2837,18 @@ async function pollClientInbox(
           activeConn = null;
           return;
         }
+        if (cycleRunning) {
+          log(`${tag} Cycle already in progress — skipping this trigger`);
+          return;
+        }
+        cycleRunning = true;
         try {
           await runPollingCycle(connection);
         } catch (e) {
-          if (cancelled) return;
+          if (cancelled) {
+            cycleRunning = false;
+            return;
+          }
           err(`${tag} Reconnecting after error: ${e.message}`);
           try {
             connection.end();
@@ -2430,18 +2857,42 @@ async function pollClientInbox(
             connection = await imaps.connect(IMAP_CONFIG);
             activeConn = connection;
             attachSocketGuards(connection); // ✅ Layer 2 — reattach on every reconnect
+            attachMailListener(connection, cycle); // ✅ reattach IDLE listener too
             await connection.openBox("INBOX");
             sessionUIDCache = new Set();
             log(`${tag} ✅ Reconnected`);
+
+            // ✅ FIX #2 — IMMEDIATE RETRY AFTER RECONNECT
+            // Problem: previously, after a successful reconnect, the code
+            // just fell through to the bottom setTimeout(cycle, 30000) —
+            // meaning ANY mail that arrived during the drop/reconnect
+            // window sat unprocessed for up to another 30s on top of the
+            // reconnect time itself. Chained drops (as seen in the Paras
+            // Gayatri Bhavan logs) could stack this into minutes.
+            // Fix: run the cycle immediately once reconnected, so a mail
+            // that arrived during the outage is picked up right away
+            // instead of waiting for the next scheduled tick.
+            cycleRunning = false;
+            await cycle();
+            return;
           } catch (e2) {
             err(`${tag} Reconnect failed: ${e2.message} — retry in 60s`);
+            cycleRunning = false;
             if (!cancelled) setTimeout(startPolling, 60000);
             return;
           }
         }
-        if (!cancelled) setTimeout(cycle, 30000);
+        cycleRunning = false;
+        // ✅ Shortened fallback interval (30s → 20s). This is now just a
+        // safety net — real-time delivery comes from the IMAP IDLE 'mail'
+        // listener above, which fires within seconds of Gmail receiving
+        // mail. This fallback only matters if a push notification is ever
+        // missed, and 20s keeps the worst case comfortably under the
+        // 1-2 min target even stacked with a retry or two.
+        if (!cancelled) setTimeout(cycle, 20000);
       }
 
+      attachMailListener(connection, cycle); // ✅ Fix #1 — push-based trigger
       cycle();
     } catch (error) {
       if (cancelled) return;
@@ -2455,6 +2906,7 @@ async function pollClientInbox(
   return function stop() {
     cancelled = true;
     log(`${tag} Stop requested`);
+    if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
     if (activeConn) {
       try {
         activeConn.end();
@@ -2532,6 +2984,52 @@ async function watchClients() {
       });
     },
   );
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ✅ FIX — WATCHDOG / SELF-HEALING CHECK
+  //
+  // Problem: if a client's poller ever silently stalls (an edge case not
+  // otherwise caught — e.g. an unexpected exception path that leaves no
+  // reconnect scheduled), there was no detection. With 15+ clients, manually
+  // noticing "which one went quiet" is impractical.
+  //
+  // Fix: every 5 minutes, compare the active Firestore client list against
+  // activePolls. Any active client missing a poller gets restarted
+  // automatically. This is a cheap safety net on top of the fixes above —
+  // it should rarely ever need to act, but guarantees no client is
+  // permanently stuck without a working poller.
+  // ═══════════════════════════════════════════════════════════════════════
+  setInterval(async () => {
+    try {
+      const snap = await getDocs(
+        query(collection(db, "clients"), where("active", "==", true)),
+      );
+      for (const d of snap.docs) {
+        const clientKey = d.id;
+        const data = d.data();
+        if (!activePolls.has(clientKey)) {
+          warn(`[Watchdog] Client ${data.businessName || clientKey} has no active poller — restarting`);
+          const plainPassword =
+            /^[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*$/.test(
+              data.appPassword,
+            )
+              ? decrypt(data.appPassword)
+              : data.appPassword;
+          const stopFn = await pollClientInbox(
+            clientKey,
+            data.email,
+            plainPassword,
+            data.businessName,
+            data.createdAt,
+          );
+          activePolls.set(clientKey, stopFn);
+          globalStopFns.add(stopFn);
+        }
+      }
+    } catch (e) {
+      warn(`[Watchdog] check failed: ${e.message}`);
+    }
+  }, 5 * 60 * 1000);
 }
 
 watchClients().catch((e) => {
