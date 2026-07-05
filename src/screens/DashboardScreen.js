@@ -27,6 +27,32 @@ const TODAY_FILTER_KEY = 'dashboard_today_only';
 const VISIBLE_STATUSES = ['Active', 'Confirmed', 'confirmed', 'Confirm', 'confirm'];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Dashboard-table-only display helper. This never touches the actual value
+// used for printing/searching/updating — it only shortens what's rendered
+// in the ORDER NO. column so long order numbers don't blow out the row.
+// ─────────────────────────────────────────────────────────────────────────────
+const MAX_ORDER_NO_DISPLAY_LEN = 10;
+const formatOrderNoForDisplay = (orderNo) => {
+  if (orderNo === null || orderNo === undefined) return orderNo;
+  const str = String(orderNo);
+  return str.length > MAX_ORDER_NO_DISPLAY_LEN
+    ? `${str.slice(0, MAX_ORDER_NO_DISPLAY_LEN)}…`
+    : str;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✅ FIX: TRAIN column display helper. trainInfo may be stored as
+// "Name/Number" or "Number/Name" (e.g. "Adi Shatabdi Exp/ 12009"). We only
+// want the numeric train number shown in the table — not the train name.
+// This never touches the underlying trainInfo value used elsewhere.
+// ─────────────────────────────────────────────────────────────────────────────
+const extractTrainNo = (trainInfo) => {
+  if (!trainInfo) return 'N/A';
+  const match = String(trainInfo).match(/\d{3,5}/);
+  return match ? match[0] : String(trainInfo);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Pagination Bar
 // ─────────────────────────────────────────────────────────────────────────────
 const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange }) => {
@@ -166,13 +192,13 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
 
         <View style={{ flex: 0.8 }}>
           <View style={[styles.badge, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
-            <Text style={{ fontSize: 9, fontWeight: '700', color: badgeTxt, letterSpacing: 0.5 }}>
+            <Text style={{ fontSize: 12, fontWeight: '800', color: badgeTxt, letterSpacing: 0.5 }}>
               {item.status || 'ACTIVE'}
             </Text>
           </View>
         </View>
 
-        <Text style={[styles.cell, { flex: 1.1, fontWeight: '700', color: '#0f172a' }]}>{item.orderNo}</Text>
+        <Text style={[styles.cell, { flex: 1.1, fontWeight: '700', color: '#0f172a' }]}>{formatOrderNoForDisplay(item.orderNo)}</Text>
         <Text style={[styles.cell, { flex: 1.0, fontSize: 12 }]}>
           {item.deliveryDate ? new Date(item.deliveryDate).toLocaleDateString('en-GB') : '—'}
         </Text>
@@ -180,7 +206,7 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted }) => {
         <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={1}>{item.vendorName}</Text>
 
         <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={2}>
-          {item.trainInfo || 'N/A'}{' '}
+          {extractTrainNo(item.trainInfo)}{' '}
           <Text style={{ color: '#dc2626', fontWeight: '700' }}>
             ({item.coach || 'No Coach'}{item.seat ? ` / ${item.seat}` : ''})
           </Text>
@@ -485,9 +511,18 @@ export default function DashboardScreen({ clientId }) {
   const handlePrint = async (order) => {
     try {
       let clientPaymentId = '';
+      // ✅ Pulled from the client's profile instead of being hardcoded, so
+      // every client's receipt shows their own business name and address.
+      let clientBusinessName = 'E-Catering Orders';
+      let clientAddress = '';
       try {
         const clientSnap = await getDoc(doc(db, 'clients', clientId));
-        if (clientSnap.exists()) clientPaymentId = clientSnap.data().paymentId || '';
+        if (clientSnap.exists()) {
+          const clientData = clientSnap.data();
+          clientPaymentId    = clientData.paymentId || '';
+          clientBusinessName = clientData.businessName || clientBusinessName;
+          clientAddress      = clientData.address || '';
+        }
       } catch (e) {}
 
       let itemsHtml = '';
@@ -507,7 +542,7 @@ export default function DashboardScreen({ clientId }) {
       const paymentType = isCOD ? 'COD' : 'ONLINE';
       const amountToCollect = isCOD ? (order.totalAmount || 0) : 0;
 
-      const trainNo   = order.trainInfo || 'N/A';
+      const trainNo   = extractTrainNo(order.trainInfo);
       const coachSeat = `${order.coach || '-'}/${order.seat || '-'}`;
       const upiUrl    = `upi://pay?pa=${clientPaymentId}&pn=${order.vendorName || 'Vendor'}&am=${amountToCollect}&cu=INR`;
 
@@ -522,81 +557,102 @@ export default function DashboardScreen({ clientId }) {
         </div>` : '';
 
       const htmlContent = `
-  <html>
-    <head>
-      <title>Receipt</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
-      <style>
-        @page { margin: 0; size: 80mm auto; }
-        * { box-sizing: border-box; font-weight: inherit; }
-        html { background-color: #ffffff; }
-        body {
-          background-color: #ffffff;
-          font-family: 'Courier New', Courier, monospace;
-          width: 72mm; margin: 0 auto; padding: 10px 16px 16px 10px;
-          font-size: 12px; color: #000; font-weight: 900;
-          -webkit-print-color-adjust: exact; print-color-adjust: exact;
-        }
-        .center { text-align: center; }
-        .bold { font-weight: bold; }
-        .divider { border: none; border-top: 1px #000; margin: 7px 0; }
-        .detail-table { width: 100%; border-collapse: collapse; }
-        .detail-table tr td { padding: 2px 0; vertical-align: top; }
-        .detail-table tr td:first-child { white-space: nowrap; padding-right: 8px; }
-        .detail-table tr td:last-child { text-align: right; word-break: break-word; }
-        .items-table { width: 100%; border-collapse: collapse; margin-top: 2px; }
-        .items-head th { font-weight: bold; padding: 4px 2px; border-top: 1px dashed #000; border-bottom: 1px dashed #000; font-size: 14px; }
-        .items-head th:first-child { text-align: left; }
-        .items-head th:last-child { text-align: right; width: 40px; }
-        .items-table tbody tr td { padding: 3px 2px; vertical-align: top; font-size: 15px; }
-        .items-table tbody tr td:last-child { text-align: right; width: 40px; }
-        .totals-table { width: 100%; border-collapse: collapse; }
-        .totals-table td { padding: 2px 0; font-size: 14px; }
-        .totals-table td:last-child { text-align: right; padding-right: 6px; }
-        .totals-table tr.total-row td { font-weight: bold; font-size: 14px; padding-top: 3px; }
-        .totals-table tr.collect-row td { font-weight: bold; font-size: 14px; }
-        .payment-box { border: 2.5px solid #000; text-align: center; padding: 8px 4px; margin: 10px 0 0 0; font-size: 30px; font-weight: 900; letter-spacing: 4px; }
-        .train-box { border: 2.5px solid #000; border-top: none; display: flex; margin: 0 0 10px 0; }
-        .train-cell { flex: 1; text-align: center; padding: 8px 4px; font-size: 16px; font-weight: 900; }
-        .train-cell.divider-right { border-right: 2.5px solid #000; }
-      </style>
-    </head>
-    <body>
-      <div class="center bold" style="font-size:16px;margin-bottom:2px;">E-Catering Orders</div>
-      <div class="center" style="font-size:11px;">26 - Shree Siddhivinayak Complex,<br/>Railway Station Vadodara</div>
-      <hr class="divider"/>
-      <table class="detail-table">
-        <tr><td>Order No.</td><td>${order.orderNo || order.pnr || 'N/A'}</td></tr>
-        <tr><td>Vendor</td><td>${order.vendorName || 'N/A'}</td></tr>
-        <tr><td>Date</td><td>${order.deliveryDate ? new Date(order.deliveryDate).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB')}</td></tr>
-        <tr><td>Time</td><td>${order.deliveryTime || new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })}</td></tr>
-        <tr><td>Customer</td><td>${order.customerName || 'Customer'}</td></tr>
-        <tr><td>Mobile</td><td>${order.contactNo || 'N/A'}</td></tr>
-      </table>
-      <hr class="divider"/>
-      <table class="items-table">
-        <thead class="items-head"><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>${itemsHtml}</tbody>
-      </table>
-      <hr class="divider"/>
-      <table class="totals-table">
-        <tr><td>Remarks:</td><td>${order.remark && order.remark.trim() !== '' ? order.remark : ''}</td></tr>
-        <tr><td>Advance:</td><td>₹ 0</td></tr>
-        <tr><td>GST:</td><td>₹ ${order.tax || 0}</td></tr>
-        <tr><td>Tax:</td><td>₹ 0</td></tr>
-        <tr><td>Discount:</td><td>₹ 0</td></tr>
-        <tr class="total-row"><td>Total:</td><td>₹ ${order.totalAmount || 0}</td></tr>
-        <tr class="collect-row"><td>Amount to collect:</td><td>₹ ${amountToCollect}</td></tr>
-      </table>
-      <div class="payment-box">${paymentType}</div>
-      <div class="train-box">
-        <div class="train-cell divider-right">${trainNo}</div>
-        <div class="train-cell">${coachSeat}</div>
-      </div>
-      ${qrHtml}
-      <div class="center" style="font-size:14px;">www.imperiial.tech</div>
-    </body>
-  </html>`;
+<html>
+  <head>
+    <title>Receipt</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+    <style>
+      @page { margin: 0; size: 80mm auto; }
+      * { box-sizing: border-box; font-weight: inherit; }
+      html { background-color: #ffffff; }
+      body {
+        background-color: #ffffff;
+        font-family: 'Courier New', Courier, monospace;
+        width: 72mm; margin: 0 auto; padding: 10px 16px 16px 10px;
+        font-size: 12px; color: #000; font-weight: 900;
+        -webkit-print-color-adjust: exact; print-color-adjust: exact;
+      }
+      .center { text-align: center; }
+      .bold { font-weight: bold; }
+      .divider { border: none; border-top: 1px #000; margin: 7px 0; }
+      .detail-table { width: 100%; border-collapse: collapse; }
+      .detail-table tr td { padding: 2px 0; vertical-align: top; }
+      .detail-table tr td:first-child { white-space: nowrap; padding-right: 8px; }
+      .detail-table tr td:last-child { text-align: right; word-break: break-word; }
+      .items-table { width: 100%; border-collapse: collapse; margin-top: 2px; }
+      .items-head th { font-weight: bold; padding: 4px 2px; border-top: 1px dashed #000; border-bottom: 1px dashed #000; font-size: 14px; }
+      .items-head th:first-child { text-align: left; }
+      .items-head th:last-child { text-align: right; width: 40px; }
+      .items-table tbody tr td { padding: 3px 2px; vertical-align: top; font-size: 15px; }
+      .items-table tbody tr td:last-child { text-align: right; width: 40px; }
+      .totals-table { width: 100%; border-collapse: collapse; }
+      .totals-table td { padding: 2px 0; font-size: 14px; }
+      .totals-table td:last-child { text-align: right; padding-right: 6px; }
+      .totals-table tr.total-row td { font-weight: bold; font-size: 14px; padding-top: 3px; }
+      .totals-table tr.collect-row td { font-weight: bold; font-size: 14px; }
+      .payment-box { border: 2.5px solid #000; text-align: center; padding: 8px 4px; margin: 10px 0 0 0; font-size: 30px; font-weight: 900; letter-spacing: 4px; }
+      .train-box { border: 2.5px solid #000; border-top: none; display: flex; margin: 0 0 10px 0; }
+      .train-cell { flex: 1; text-align: center; padding: 8px 4px; font-size: 16px; font-weight: 900; }
+      .train-cell.divider-right { border-right: 2.5px solid #000; }
+
+      /* ── Company logo watermark ── */
+      .watermark-wrap {
+        text-align: center;
+        margin: 10px 0;
+        line-height: 0;
+      }
+    </style>
+  </head>
+  <body>
+
+    <div class="center bold" style="font-size:16px;margin-bottom:2px;">${clientBusinessName}</div>
+    <div class="center" style="font-size:11px;">${clientAddress}</div>
+    <hr class="divider"/>
+    <table class="detail-table">
+      <tr><td>Order No.</td><td>${order.orderNo || order.pnr || 'N/A'}</td></tr>
+      <tr><td>Vendor</td><td>${order.vendorName || 'N/A'}</td></tr>
+      <tr><td>Date</td><td>${order.deliveryDate ? new Date(order.deliveryDate).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB')}</td></tr>
+      <tr><td>Time</td><td>${order.deliveryTime || new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })}</td></tr>
+      <tr><td>Customer</td><td>${order.customerName || 'Customer'}</td></tr>
+      <tr><td>Mobile</td><td>${order.contactNo || 'N/A'}</td></tr>
+    </table>
+    <hr class="divider"/>
+    <table class="items-table">
+      <thead class="items-head"><tr><th>Item</th><th>Qty</th></tr></thead>
+      <tbody>${itemsHtml}</tbody>
+    </table>
+    <!-- ── Company logo centered between items and totals ── -->
+    <div class="watermark-wrap">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="120" height="120" opacity="0.09">
+        <rect width="100" height="100" rx="18" fill="#121212"/>
+        <g transform="translate(28, 16) scale(1.82)">
+          <path d="M 2,0 H 16 L 24,8 V 32 Q 24,34 22,34 H 2 Q 0,34 0,32 V 2 Q 0,0 2,0 Z" fill="#FFFFFF"/>
+          <path d="M 16,0 L 16,8 L 24,8" fill="none" stroke="#cccccc" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="4" y1="15" x2="20" y2="15" stroke="#121212" stroke-width="2.8" stroke-linecap="round"/>
+          <line x1="4" y1="21" x2="20" y2="21" stroke="#121212" stroke-width="2.8" stroke-linecap="round"/>
+          <line x1="4" y1="27" x2="14" y2="27" stroke="#121212" stroke-width="2.8" stroke-linecap="round"/>
+        </g>
+      </svg>
+    </div>
+    <hr class="divider"/>
+    <table class="totals-table">
+      <tr><td>Remarks:</td><td>${order.remark && order.remark.trim() !== '' ? order.remark : ''}</td></tr>
+      <tr><td>Advance:</td><td>₹ 0</td></tr>
+      <tr><td>GST:</td><td>₹ ${order.tax || 0}</td></tr>
+      <tr><td>Tax:</td><td>₹ 0</td></tr>
+      <tr><td>Discount:</td><td>₹ 0</td></tr>
+      <tr class="total-row"><td>Total:</td><td>₹ ${order.totalAmount || 0}</td></tr>
+      <tr class="collect-row"><td>Amount to collect:</td><td>₹ ${amountToCollect}</td></tr>
+    </table>
+    <div class="payment-box">${paymentType}</div>
+    <div class="train-box">
+      <div class="train-cell divider-right">${trainNo}</div>
+      <div class="train-cell">${coachSeat}</div>
+    </div>
+    ${qrHtml}
+    <div class="center" style="font-size:14px;">www.imperiial.tech</div>
+  </body>
+</html>`;
 
       if (Platform.OS === 'web') {
         const iframe = document.createElement('iframe');
