@@ -7,17 +7,28 @@ import { Picker } from '@react-native-picker/picker';
 
 const isWeb = Dimensions.get('window').width > 768;
 
-const VENDOR_LIST = [
-  'Direct', 'IRCTC3', 'RAILOFY', 'Food_Train', 'Go_Food', 'IRCTC', 'OLF',
+const PRIORITY_VENDORS = ['Direct', 'Vishnu', 'Bunty', 'Vivek'];
+
+const OTHER_VENDORS = [
+  'Go_Food', 'IRCTC', 'OLF',
   'Rail_Food', 'Rail_Restro', 'Rail_Yatri', 'Rajdhani', 'Yatri_Bhojan',
-  'Zoop_India', 'Travel_Khana', 'Khana_Online', 'Train_Bhojan', 'Rail_Recipe',
-  'Etos', 'Rail_Meal', 'SpicyWagon', 'Traveler_Food', 'Jd_Food', 'Hotel_Janki',
-  'Rajbhog', 'Dibrail', 'nStore', 'IRCTC_RR', 'RailFeast', 'Comesum',
-  'YatriRestro', 'HomeBytes'
+  'Zoop_India', 'Khana_Online', 'Train_Bhojan', 'Rail_Recipe',
+  'Etos', 'Rail_Meal', 'SpicyWagon', 'Rajbhog', 'Dibrail', 'RailFeast',
+  'YatriRestro', 'HomeBytes',
 ].sort();
+
+const VENDOR_LIST = [...PRIORITY_VENDORS, ...OTHER_VENDORS];
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS_SHORT = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+
+// Generates an automatic Order ID: "PS" + a 10-digit random number (e.g. PS1542632514)
+function generateOrderId() {
+  const min = 1000000000; // 10 digits, smallest
+  const max = 9999999999; // 10 digits, largest
+  const randomDigits = Math.floor(Math.random() * (max - min + 1)) + min;
+  return `PS${randomDigits}`;
+}
 
 function DateTimePicker({ visible, onClose, onConfirm, initialDate, initialTime }) {
   const now = new Date();
@@ -188,23 +199,25 @@ export default function AddOrderScreen({ onNavigate, clientId }) {
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [selectedCat, setSelectedCat] = useState(null);
-  const [orderId] = useState(Date.now().toString());
+  // Order ID is now client-editable. Blank = auto-generated at submit time (PS + 10 digits).
+  const [orderId, setOrderId] = useState('');
   const [vendorName, setVendorName] = useState(VENDOR_LIST[0]);
   const [trainNo, setTrainNo] = useState('');
   const [coach, setCoach] = useState('');
   const [seat, setSeat] = useState('');
-  const [pnr, setPnr] = useState('');
-  const [customerName, setCustomerName] = useState('');
   const [mobileNo, setMobileNo] = useState('');
-  const [remark, setRemark] = useState('');
   const [orderType, setOrderType] = useState('Vegetarian');
   const [paymentType, setPaymentType] = useState('COD');
   const [deliveryDate, setDeliveryDate] = useState(new Date().toLocaleDateString('en-CA'));
   const [deliveryTime, setDeliveryTime] = useState(new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }));
   const [cart, setCart] = useState([]);
   const [deliveryChargeInput, setDeliveryChargeInput] = useState('0');
-  const [gstPercent, setGstPercent] = useState('5');
+  const [gstPercent, setGstPercent] = useState('0');
   const [discountPercent, setDiscountPercent] = useState('0');
+
+  // Coach number is always stored/displayed in uppercase, regardless of
+  // how the client types it (e.g. "b5" or "B5" both become "B5").
+  const handleCoachChange = (text) => setCoach(text.toUpperCase());
 
   useEffect(() => {
     const u1 = onSnapshot(query(collection(db, 'categories'), where('clientId', '==', clientId)), snap => {
@@ -232,10 +245,11 @@ export default function AddOrderScreen({ onNavigate, clientId }) {
 
   const handlePlaceOrder = async () => {
     if (cart.length === 0) { Alert.alert('Error', 'Cart is empty'); return; }
-    if (!customerName) { Alert.alert('Error', 'Customer Name is required'); return; }
+    // Use client-typed Order ID if provided, otherwise auto-generate one (PS + 10 digits)
+    const finalOrderId = orderId.trim() ? orderId.trim() : generateOrderId();
     const orderData = {
-      orderNo: orderId, vendorName, customerName, contactNo: mobileNo, trainInfo: trainNo, coach,
-      seat, pnr, orderType, paymentType, remark,
+      orderNo: finalOrderId, vendorName, contactNo: mobileNo, trainInfo: trainNo, coach,
+      seat, orderType, paymentType,
       orderDate: new Date().toISOString().split('T')[0],
       orderTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       deliveryDate, deliveryTime,
@@ -261,25 +275,22 @@ export default function AddOrderScreen({ onNavigate, clientId }) {
           <TouchableOpacity onPress={() => onNavigate('Dashboard')} style={styles.backBtn}><Ionicons name="arrow-back" size={18} color="#64748b" /></TouchableOpacity>
           <Text style={styles.headerTitle}>New Order</Text>
         </View>
-        <Text style={styles.orderIdBadge}>#{orderId.slice(-6)}</Text>
+        <Text style={styles.orderIdBadge}>{orderId.trim() ? `#${orderId.trim().slice(-6)}` : '#Auto'}</Text>
       </View>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.mainLayout}>
           <View style={[styles.card, styles.leftCard]}>
             <View style={styles.cardTitleRow}><View style={styles.cardTitleDot} /><Text style={styles.cardTitle}>Order Details</Text></View>
             <View style={styles.formGrid}>
-              {renderInput('Order ID (Auto)', orderId, null, '', 'default', false)}
+              {renderInput('Order ID', orderId, setOrderId, 'Leave blank for auto ID')}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Vendor Name</Text>
                 <View style={styles.pickerBorder}><Picker selectedValue={vendorName} onValueChange={setVendorName} style={styles.picker}>{VENDOR_LIST.map(v => <Picker.Item key={v} label={v} value={v} />)}</Picker></View>
               </View>
               {renderInput('Train Number & Name', trainNo, setTrainNo, 'Train Number & Name')}
-              {renderInput('Coach Number', coach, setCoach, 'Coach Number')}
+              {renderInput('Coach Number', coach, handleCoachChange, 'Coach Number')}
               {renderInput('Seat Number', seat, setSeat, 'Seat Number')}
-              {renderInput('PNR', pnr, setPnr, 'PNR')}
-              {renderInput('Customer Name', customerName, setCustomerName, 'Customer Name')}
               {renderInput('Mobile No', mobileNo, setMobileNo, 'Mobile Number', 'phone-pad')}
-              {renderInput('Remark / Special Instructions', remark, setRemark, 'e.g., No onion/garlic')}
               <View style={{ width: '100%' }}><DateTimeField deliveryDate={deliveryDate} deliveryTime={deliveryTime} onChange={(date, time) => { setDeliveryDate(date); setDeliveryTime(time); }} /></View>
             </View>
             <View style={styles.radioSection}>
@@ -328,7 +339,7 @@ export default function AddOrderScreen({ onNavigate, clientId }) {
             <View style={styles.formGrid}>
               {renderInput('Sub Total', subTotal.toFixed(2), null, '', 'default', false)}
               {renderInput('Delivery Charges', deliveryChargeInput, setDeliveryChargeInput, '0', 'numeric')}
-              {renderInput('GST (1-100)%', gstPercent, setGstPercent, '5', 'numeric')}
+              {renderInput('GST (1-100)%', gstPercent, setGstPercent, '0', 'numeric')}
               {renderInput('Discount (1-100)%', discountPercent, setDiscountPercent, '0', 'numeric')}
             </View>
             <View style={styles.totalBar}><Text style={styles.totalLabel}>AMOUNT TO COLLECT</Text><Text style={styles.totalValue}>₹ {totalAmount.toFixed(2)}</Text></View>
