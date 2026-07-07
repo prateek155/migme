@@ -42,6 +42,7 @@ const spicywagon  = require('./spicywagon');
 const irctc       = require('./irctc');
 const gofood      = require('./gofood');
 const travelkhana = require('./travelkhana');
+const jaipurrasoionrails = require('./jaipurrasoionrails');
 const generic     = require('./generic');
 
 const vendors = [
