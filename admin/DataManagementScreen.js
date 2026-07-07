@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ActivityIndicator, Alert, ScrollView, useWindowDimensions,
-  Modal, Share, Animated,
+  Modal, Animated,
 } from 'react-native';
 import {
   collection, onSnapshot, query, where, getDocs, writeBatch,
@@ -29,7 +29,7 @@ const C = {
 };
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
-const TABS = ['Overview', 'Storage', 'Delete', 'Tools'];
+const TABS = ['Storage', 'Delete'];
 
 /* ─── Per-client Firestore collections ─────────────────────────── */
 const CLIENT_COLS = [
@@ -39,13 +39,6 @@ const CLIENT_COLS = [
   { key: 'categories',  col: 'categories',        label: 'Categories',          color: C.orange },
   { key: 'execs',       col: 'executives',        label: 'Delivery executives', color: C.dim    },
 ];
-
-/* ─── Firebase free-tier daily hard limits (quota ceiling, never changes) ── */
-const FB_QUOTA = {
-  reads:   50000,
-  writes:  20000,
-  deletes: 20000,
-};
 
 /* ─── Helpers ───────────────────────────────────────────────────── */
 const fmtCount  = (n) => (n || 0).toLocaleString();
@@ -126,16 +119,6 @@ function OutlineBtn({ label, icon, onPress, disabled }) {
     </TouchableOpacity>
   );
 }
-function MetricCard({ value, label, color, loading }) {
-  return (
-    <View style={styles.metricCard}>
-      {loading
-        ? <ActivityIndicator size="small" color={C.dim} />
-        : <Text style={[styles.metricVal, { color }]}>{value}</Text>}
-      <Text style={styles.metricLbl}>{label}</Text>
-    </View>
-  );
-}
 function Chip({ label, variant = 'blue' }) {
   const map = {
     blue:  { bg: 'rgba(59,130,246,0.15)',  text: C.acc  },
@@ -160,14 +143,6 @@ function StatRow({ label, value, color, last }) {
     </View>
   );
 }
-function ProjRow({ label, value, valueColor, last }) {
-  return (
-    <View style={[styles.projRow, last && { borderBottomWidth: 0 }]}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, { color: valueColor || C.txt }]}>{value}</Text>
-    </View>
-  );
-}
 
 /* ═══════════════════════════════════════════════════════════════════
    Main Screen
@@ -181,7 +156,6 @@ export default function DataManagementScreen({ onBack }) {
   const [clientCounts,  setClientCounts]  = useState({});
   const [countsLoading, setCountsLoading] = useState(true);
   const [loading,       setLoading]       = useState(false);
-  const [toolLoading,   setToolLoading]   = useState('');
 
   const [tab,           setTab]           = useState(0);
   const [selClient,     setSelClient]     = useState(null);
@@ -192,14 +166,6 @@ export default function DataManagementScreen({ onBack }) {
   const [result,        setResult]        = useState(null);
   const [modalVisible,  setModalVisible]  = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
-
-  const [auditResult,    setAuditResult]   = useState(null);
-  const [archiveResult,  setArchiveResult] = useState(null);
-  const [archiveMonths,  setArchiveMonths] = useState('6');
-
-  // Firebase daily operation counts — fetched from backend (Cloud Monitoring)
-  const [fbUsage,        setFbUsage]       = useState(null);   // { reads, writes, deletes } or null
-  const [fbUsageLoading, setFbUsageLoading] = useState(true);
 
   /* ── Load clients ── */
   useEffect(() => {
@@ -238,33 +204,6 @@ export default function DataManagementScreen({ onBack }) {
     return () => { cancelled = true; };
   }, [clients]);
 
-  /* ── Fetch real Firebase daily operation counts from backend ──
-     Your backend should call Google Cloud Monitoring API:
-     GET /api/admin/firebase-usage
-     and return: { reads: number, writes: number, deletes: number }
-     See: https://cloud.google.com/monitoring/api/metrics_gcp#firestore
-  ── */
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setFbUsageLoading(true);
-      try {
-        const res  = await fetch(`${BACKEND_URL}/api/admin/firebase-usage`, {
-          headers: { 'x-admin-key': process.env.EXPO_PUBLIC_ADMIN_API_KEY || '' },
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        // Expected shape: { reads: number, writes: number, deletes: number }
-        if (!cancelled) setFbUsage(data);
-      } catch {
-        // Endpoint not yet implemented — show bars as unavailable, not fake numbers
-        if (!cancelled) setFbUsage(null);
-      }
-      if (!cancelled) setFbUsageLoading(false);
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
   const getAdminKey = () => process.env.EXPO_PUBLIC_ADMIN_API_KEY || '';
   const cnt = (id) => clientCounts[id] || {};
 
@@ -273,12 +212,7 @@ export default function DataManagementScreen({ onBack }) {
     acc[key] = clients.reduce((s, c) => s + (cnt(c.id)[key] || 0), 0);
     return acc;
   }, {});
-  const totalDocs   = Object.values(totals).reduce((s, v) => s + v, 0) + clients.length;
-  const totalEstMb  = clients.reduce((s, c) => s + docEstimateMb(cnt(c.id)), 0) + 305; // +305 MB admin overhead
   const QUOTA_MB    = 1024; // Firestore free tier ~1 GB practical limit
-  const usedPct     = pct(totalEstMb, QUOTA_MB);
-  const DAILY_MB    = Math.max(totalEstMb / 90, 1); // rough growth: fill in 90 days
-  const daysLeft    = Math.round((QUOTA_MB - totalEstMb) / DAILY_MB);
 
   /* ── Delete via backend ── */
   async function executeDelete() {
@@ -323,119 +257,6 @@ export default function DataManagementScreen({ onBack }) {
     setPendingAction(type); setModalVisible(true);
   }
 
-  /* ── Export via Share sheet ── */
-  async function exportData(format) {
-    if (!selClient) { Alert.alert('Select a client first'); return; }
-    setToolLoading('export');
-    try {
-      const snap = await getDocs(
-        query(collection(db, 'orders'), where('clientId', '==', selClient.id))
-      );
-      const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (rows.length === 0) { Alert.alert('No orders', 'This client has no orders.'); setToolLoading(''); return; }
-      let content;
-      if (format === 'json') {
-        content = JSON.stringify(rows, null, 2);
-      } else {
-        const keys   = Object.keys(rows[0]);
-        const header = keys.join(',');
-        const lines  = rows.map(r =>
-          keys.map(k => {
-            const v = r[k];
-            const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
-            return `"${s.replace(/"/g, '""')}"`;
-          }).join(',')
-        );
-        content = [header, ...lines].join('\n');
-      }
-      await Share.share({ message: content, title: `${selClient.businessName}_orders.${format}` });
-    } catch (e) { Alert.alert('Export failed', e.message); }
-    setToolLoading('');
-  }
-
-  /* ── Audit orphaned docs ── */
-  async function runAudit() {
-    setToolLoading('audit'); setAuditResult(null);
-    try {
-      const clientIds = new Set(clients.map(c => c.id));
-      const issues = [];
-      for (const { col, label } of CLIENT_COLS) {
-        const snap = await getDocs(collection(db, col));
-        let orphans = 0;
-        snap.docs.forEach(d => { if (d.data().clientId && !clientIds.has(d.data().clientId)) orphans++; });
-        if (orphans > 0) issues.push({ col, label, orphans });
-      }
-      setAuditResult({ ran: true, issues, clean: issues.length === 0, ts: new Date().toLocaleTimeString() });
-    } catch (e) { Alert.alert('Audit failed', e.message); }
-    setToolLoading('');
-  }
-
-  /* ── Fix orphans ── */
-  async function fixOrphans() {
-    if (!auditResult?.issues?.length) return;
-    Alert.alert('Fix orphaned documents?', 'Permanently delete all orphaned documents found. Cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete orphans', style: 'destructive', onPress: async () => {
-        setToolLoading('fix');
-        try {
-          const clientIds = new Set(clients.map(c => c.id));
-          let deleted = 0;
-          for (const { col } of CLIENT_COLS) {
-            const snap = await getDocs(collection(db, col));
-            const batch = writeBatch(db);
-            let bc = 0;
-            for (const d of snap.docs) {
-              if (d.data().clientId && !clientIds.has(d.data().clientId)) {
-                batch.delete(d.ref); deleted++; bc++;
-                if (bc === 499) { await batch.commit(); bc = 0; }
-              }
-            }
-            if (bc > 0) await batch.commit();
-          }
-          setAuditResult(prev => ({ ...prev, fixed: deleted, issues: [], clean: true }));
-          Alert.alert('Done', `Deleted ${deleted} orphaned documents.`);
-        } catch (e) { Alert.alert('Fix failed', e.message); }
-        setToolLoading('');
-      }},
-    ]);
-  }
-
-  /* ── Archive old orders ── */
-  async function archiveOldOrders() {
-    if (!selClient) { Alert.alert('Select a client first'); return; }
-    const months = parseInt(archiveMonths, 10);
-    if (!months || months < 1) { Alert.alert('Invalid', 'Enter a valid number of months'); return; }
-    const cutoff = new Date();
-    cutoff.setMonth(cutoff.getMonth() - months);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
-    Alert.alert(
-      'Archive old orders?',
-      `Delete all orders for ${selClient.businessName} before ${cutoffStr}?\nThis cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Archive', style: 'destructive', onPress: async () => {
-          setToolLoading('archive'); setArchiveResult(null);
-          try {
-            const res  = await fetch(`${BACKEND_URL}/api/data/client/${selClient.id}/range`, {
-              method: 'DELETE',
-              headers: { 'Content-Type': 'application/json', 'x-admin-key': getAdminKey() },
-              body: JSON.stringify({ startDate: '2000-01-01', endDate: cutoffStr }),
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error);
-            setArchiveResult({ deletedOrders: data.deletedOrders, deletedIndex: data.deletedIndexEntries || 0, cutoff: cutoffStr, client: selClient.businessName });
-            setClientCounts(prev => {
-              const u = { ...prev };
-              if (u[selClient.id]) u[selClient.id] = { ...u[selClient.id], orders: Math.max(0, (u[selClient.id].orders || 0) - (data.deletedOrders || 0)) };
-              return u;
-            });
-          } catch (e) { Alert.alert('Archive failed', e.message); }
-          setToolLoading('');
-        }},
-      ]
-    );
-  }
-
   /* ── Filtered client list ── */
   const filtered = clients.filter(c =>
     c.businessName?.toLowerCase().includes(clientSearch.toLowerCase()) ||
@@ -464,7 +285,7 @@ export default function DataManagementScreen({ onBack }) {
           <TouchableOpacity
             key={c.id}
             style={[styles.clientItem, isSel && styles.clientItemSel, { marginBottom: 6 }]}
-            onPress={() => { setSelClient(c); setResult(null); setAuditResult(null); setArchiveResult(null); }}
+            onPress={() => { setSelClient(c); setResult(null); }}
             activeOpacity={0.8}
           >
             <View style={styles.clientItemRow}>
@@ -501,116 +322,7 @@ export default function DataManagementScreen({ onBack }) {
   };
 
   /* ════════════════════════════════════════════════════════════════
-     TAB 1 — OVERVIEW
-  ════════════════════════════════════════════════════════════════ */
-  const OverviewTab = () => (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
-
-      {/* Metric tiles */}
-      <View style={[styles.metricGrid, isDesktop && styles.metricGridDesktop]}>
-        <MetricCard value={clients.length.toString()}  label="Active clients"   color={C.acc}  loading={false} />
-        <MetricCard value={fmtCount(totals.orders)}    label="Total orders"     color={C.teal} loading={countsLoading} />
-        <MetricCard value={fmtMb(totalEstMb)}          label="Est. storage used" color={barColor(usedPct)} loading={countsLoading} />
-        <MetricCard value={countsLoading ? '—' : `~${daysLeft}d`} label="Until quota full" color={C.dim} loading={false} />
-      </View>
-
-      {/* Warning banner */}
-      {!countsLoading && usedPct > 55 && (
-        <View style={[
-          styles.warnBox,
-          usedPct > 80 && { borderColor: 'rgba(248,113,113,0.4)', backgroundColor: 'rgba(248,113,113,0.07)' },
-        ]}>
-          <Ionicons name="warning-outline" size={16} color={usedPct > 80 ? C.dan : C.warn} />
-          <Text style={[styles.warnTxt, usedPct > 80 && { color: C.dan }]}>
-            Estimated storage at {usedPct}% — at current growth rate you may hit quota in ~{daysLeft} days.
-            Consider archiving old orders.
-          </Text>
-        </View>
-      )}
-
-      {/* Firebase quota bars */}
-      <Card>
-        <CardHeader icon="server-outline" title="Firebase quota" color={C.acc} />
-        {countsLoading
-          ? <ActivityIndicator size="small" color={C.teal} style={{ marginVertical: 10 }} />
-          : <>
-              <View style={styles.scaleRow}>
-                <Text style={styles.scaleLabel}>Estimated Firestore storage</Text>
-                <Text style={[styles.scaleVal, { color: barColor(usedPct) }]}>{fmtMb(totalEstMb)} / 1 GB</Text>
-              </View>
-              <StorageBar pctVal={usedPct} />
-              {[
-                { label: 'Reads / day',   key: 'reads'   },
-                { label: 'Writes / day',  key: 'writes'  },
-                { label: 'Deletes / day', key: 'deletes' },
-              ].map(({ label, key }) => {
-                const max  = FB_QUOTA[key];
-                const used = fbUsage?.[key];
-                const p    = used != null ? pct(used, max) : null;
-                return (
-                  <View key={key} style={{ marginTop: 10 }}>
-                    <View style={styles.scaleRow}>
-                      <Text style={styles.scaleLabel}>{label}</Text>
-                      {fbUsageLoading
-                        ? <ActivityIndicator size="small" color={C.dim} />
-                        : used != null
-                          ? <Text style={[styles.scaleVal, { color: barColor(p) }]}>{used.toLocaleString()} / {max.toLocaleString()}</Text>
-                          : <Text style={[styles.scaleVal, { color: C.dim }]}>Unavailable — add backend endpoint</Text>
-                      }
-                    </View>
-                    {p != null && !fbUsageLoading && <StorageBar pctVal={p} />}
-                    {p == null && !fbUsageLoading && (
-                      <View style={[styles.barTrack, { height: 8, borderRadius: 4 }]}>
-                        <View style={{ height: 8, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 4, borderWidth: 1, borderColor: C.border, borderStyle: 'dashed' }} />
-                      </View>
-                    )}
-                  </View>
-                );
-              })}
-            </>
-        }
-        <View style={styles.legendRow}>
-          {[['Safe', C.suc], ['Warning >70%', C.warn], ['Critical >90%', C.dan]].map(([l, col]) => (
-            <View key={l} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <View style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: col }} />
-              <Text style={{ fontSize: 10, color: C.dim }}>{l}</Text>
-            </View>
-          ))}
-        </View>
-      </Card>
-
-      {/* Collection breakdown */}
-      <Card>
-        <CardHeader icon="layers-outline" title="All collections" color={C.acc} />
-        {countsLoading
-          ? <ActivityIndicator size="small" color={C.teal} style={{ marginVertical: 10 }} />
-          : <>
-              {CLIENT_COLS.map(({ key, label, color }, i) => (
-                <StatRow key={key} label={label} value={fmtCount(totals[key])} color={color} last={false} />
-              ))}
-              <View style={styles.divider} />
-              <StatRow label="Client config docs" value={fmtCount(clients.length)} color={C.acc} last />
-              <View style={styles.divider} />
-              <StatRow label="Grand total" value={fmtCount(totalDocs)} color={C.txt} last />
-            </>
-        }
-      </Card>
-
-      {/* Storage projection */}
-      {!countsLoading && (
-        <Card>
-          <CardHeader icon="trending-up-outline" title="Storage projection" color={C.teal} />
-          <ProjRow label="Today"    value={`${fmtMb(totalEstMb)} (${usedPct}%)`} valueColor={C.suc} />
-          <ProjRow label="+2 weeks" value={`${fmtMb(totalEstMb + 14 * DAILY_MB)} (${pct(totalEstMb + 14 * DAILY_MB, QUOTA_MB)}%)`} valueColor={C.warn} />
-          <ProjRow label="+4 weeks" value={`${fmtMb(totalEstMb + 28 * DAILY_MB)} (${pct(totalEstMb + 28 * DAILY_MB, QUOTA_MB)}%)`} valueColor={C.dan} />
-          <ProjRow label="+6 weeks" value={`${fmtMb(totalEstMb + 42 * DAILY_MB)} — near limit`} valueColor={C.dan} last />
-        </Card>
-      )}
-    </ScrollView>
-  );
-
-  /* ════════════════════════════════════════════════════════════════
-     TAB 2 — STORAGE (per-client breakdown)
+     TAB 1 — STORAGE (per-client breakdown)
   ════════════════════════════════════════════════════════════════ */
   const StorageTab = () => {
     const colColors = [C.acc, C.teal, C.warn, C.purple, C.orange, C.dan];
@@ -700,17 +412,13 @@ export default function DataManagementScreen({ onBack }) {
                       <Chip label={`~${oldEmailsMb} MB`} variant="warn" />
                     </View>
                     <View style={[styles.projRow, { borderBottomWidth: 0 }]}>
-                      <Text style={{ fontSize: 12, color: C.dim, flex: 1 }}>Orphaned documents (run audit)</Text>
-                      <Chip label="Run audit" variant="blue" />
+                      <Text style={{ fontSize: 12, color: C.dim, flex: 1 }}>Orphaned documents</Text>
+                      <Chip label="—" variant="dim" />
                     </View>
                   </>
                 );
               })()
           }
-          <View style={[styles.row2, { marginTop: 12 }]}>
-            <OutlineBtn label="Run audit" icon="scan-outline" onPress={() => { setTab(3); }} />
-            <Btn label="Archive old" icon="archive-outline" color={C.teal} onPress={() => setTab(3)} />
-          </View>
         </Card>
 
       </ScrollView>
@@ -718,7 +426,7 @@ export default function DataManagementScreen({ onBack }) {
   };
 
   /* ════════════════════════════════════════════════════════════════
-     TAB 3 — DELETE
+     TAB 2 — DELETE
   ════════════════════════════════════════════════════════════════ */
   const DeleteTab = () => {
     const cc      = selClient ? cnt(selClient.id) : null;
@@ -800,107 +508,6 @@ export default function DataManagementScreen({ onBack }) {
   };
 
   /* ════════════════════════════════════════════════════════════════
-     TAB 4 — TOOLS
-  ════════════════════════════════════════════════════════════════ */
-  const ToolsTab = () => (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
-
-      <ClientSelector />
-
-      {/* Export */}
-      <Card>
-        <CardHeader icon="download-outline" title="Export orders" color={C.suc} />
-        <Text style={styles.desc}>
-          {selClient
-            ? `Export all orders for ${selClient.businessName} and share via your device.`
-            : 'Select a client above, then export their orders.'}
-        </Text>
-        <View style={styles.row2}>
-          <OutlineBtn label="Export JSON" icon="code-slash-outline" onPress={() => exportData('json')} disabled={!selClient || toolLoading === 'export'} />
-          <OutlineBtn label="Export CSV"  icon="document-text-outline" onPress={() => exportData('csv')}  disabled={!selClient || toolLoading === 'export'} />
-        </View>
-        {toolLoading === 'export' && <ActivityIndicator size="small" color={C.suc} style={{ marginTop: 10 }} />}
-      </Card>
-
-      {/* Archive */}
-      <Card>
-        <CardHeader icon="archive-outline" title="Archive old orders" color={C.teal} />
-        <Text style={styles.desc}>
-          Delete orders older than N months for the selected client. Calls your backend range-delete API so index entries are cleaned too.
-        </Text>
-        <View style={styles.row2}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.label}>Months to keep</Text>
-            <TextInput style={styles.input} placeholder="e.g. 6" placeholderTextColor={C.dim} value={archiveMonths} onChangeText={setArchiveMonths} keyboardType="numeric" />
-          </View>
-          <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-            <Btn
-              label={toolLoading === 'archive' ? 'Running…' : 'Run archive'}
-              icon="archive-outline"
-              color={C.teal}
-              onPress={archiveOldOrders}
-              disabled={!selClient || toolLoading === 'archive'}
-            />
-          </View>
-        </View>
-        {archiveResult && (
-          <View style={[styles.resultBanner, { borderColor: C.tealLt, marginTop: 12, marginBottom: 0 }]}>
-            <Ionicons name="checkmark-circle" size={16} color={C.tealLt} />
-            <Text style={[styles.resultTxt, { color: C.tealLt }]}>
-              Archived {fmtCount(archiveResult.deletedOrders)} orders
-              {archiveResult.deletedIndex > 0 ? ` + ${fmtCount(archiveResult.deletedIndex)} index entries` : ''}
-              {' '}for {archiveResult.client} (before {archiveResult.cutoff})
-            </Text>
-          </View>
-        )}
-      </Card>
-
-      {/* Audit */}
-      <Card>
-        <CardHeader icon="scan-outline" title="Orphan audit" color={C.warn} />
-        <Text style={styles.desc}>
-          Scans every collection for documents whose clientId no longer matches any existing client. Useful after deleting a client without cleaning up their data.
-        </Text>
-        <Btn label={toolLoading === 'audit' ? 'Scanning…' : 'Run audit'} icon="search-outline" color={C.warn} onPress={runAudit} disabled={toolLoading === 'audit'} />
-        {toolLoading === 'audit' && <ActivityIndicator size="small" color={C.warn} style={{ marginTop: 10 }} />}
-
-        {auditResult && (
-          <View style={{ marginTop: 14 }}>
-            <View style={styles.divider} />
-            {auditResult.fixed != null && (
-              <View style={[styles.resultBanner, { borderColor: C.suc, marginBottom: 10 }]}>
-                <Ionicons name="checkmark-circle" size={16} color={C.suc} />
-                <Text style={[styles.resultTxt, { color: C.suc }]}>Fixed — deleted {fmtCount(auditResult.fixed)} orphaned documents</Text>
-              </View>
-            )}
-            {auditResult.clean
-              ? (
-                <View style={[styles.resultBanner, { borderColor: C.suc, marginBottom: 0 }]}>
-                  <Ionicons name="shield-checkmark-outline" size={16} color={C.suc} />
-                  <Text style={[styles.resultTxt, { color: C.suc }]}>All clean — no orphaned documents found (at {auditResult.ts})</Text>
-                </View>
-              )
-              : (
-                <>
-                  <Text style={[styles.label, { marginBottom: 8, color: C.dan }]}>Issues found at {auditResult.ts}:</Text>
-                  {auditResult.issues.map(({ label, orphans }) => (
-                    <View key={label} style={styles.statRow}>
-                      <Text style={styles.statLabel}>{label}</Text>
-                      <Chip label={`${orphans} orphaned`} variant="dan" />
-                    </View>
-                  ))}
-                  <Btn label={toolLoading === 'fix' ? 'Fixing…' : 'Fix all orphans'} icon="trash-outline" color={C.dan} onPress={fixOrphans} disabled={toolLoading === 'fix'} style={{ marginTop: 12 }} />
-                </>
-              )
-            }
-          </View>
-        )}
-      </Card>
-
-    </ScrollView>
-  );
-
-  /* ════════════════════════════════════════════════════════════════
      CONFIRM MODAL
   ════════════════════════════════════════════════════════════════ */
   const ConfirmModal = () => {
@@ -943,7 +550,7 @@ export default function DataManagementScreen({ onBack }) {
   /* ════════════════════════════════════════════════════════════════
      RENDER
   ════════════════════════════════════════════════════════════════ */
-  const tabComponents = [OverviewTab, StorageTab, DeleteTab, ToolsTab];
+  const tabComponents = [StorageTab, DeleteTab];
   const ActiveTab     = tabComponents[tab];
 
   return (
@@ -1012,17 +619,6 @@ const styles = StyleSheet.create({
 
   metricGrid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 },
   metricGridDesktop: { flexWrap: 'nowrap' },
-  metricCard:        { flex: 1, minWidth: '45%', backgroundColor: C.surf, borderRadius: 8, padding: 12, alignItems: 'center', minHeight: 68, justifyContent: 'center' },
-  metricVal:         { fontSize: 22, fontWeight: '800' },
-  metricLbl:         { fontSize: 10, color: C.dim, marginTop: 3, textAlign: 'center' },
-
-  scaleRow:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
-  scaleLabel:        { fontSize: 11, color: C.dim },
-  scaleVal:          { fontSize: 11, fontWeight: '600' },
-  legendRow:         { flexDirection: 'row', gap: 14, flexWrap: 'wrap', marginTop: 12 },
-
-  warnBox:           { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(245,158,11,0.35)', backgroundColor: 'rgba(245,158,11,0.07)', marginBottom: 12 },
-  warnTxt:           { flex: 1, fontSize: 12, color: C.warn, lineHeight: 18 },
 
   statRow:           { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: C.border },
   statLabel:         { fontSize: 12, color: C.dim },
@@ -1030,8 +626,6 @@ const styles = StyleSheet.create({
 
   projRow:           { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: C.border },
 
-  clientStatRow:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.border },
-  clientStatName:    { fontSize: 13, fontWeight: '600', color: C.txt },
   clientStorageHdr:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
 
   divider:           { borderTopWidth: 1, borderTopColor: C.border, marginVertical: 8 },
