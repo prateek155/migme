@@ -21,10 +21,36 @@ const SIDEBAR_COLLAPSED = 56;
 const MOBILE_BP         = 768;
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─── URL <-> Screen mapping (web only) ────────────────────────────────────────
+// Same approach used in the client-facing App.js: each admin screen gets its
+// own URL, and the browser Back/Forward buttons move between them correctly.
+const SCREEN_PATHS = {
+  Dashboard:         '/dashboard',
+  AddClient:         '/add-client',
+  ClientDetail:      '/client-detail',
+  DataManagement:    '/data-management',
+  ClientManagement:  '/client-management',
+};
+const PATH_SCREENS = Object.fromEntries(
+  Object.entries(SCREEN_PATHS).map(([screen, path]) => [path, screen])
+);
+const isWeb = Platform.OS === 'web' && typeof window !== 'undefined';
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function App() {
   const [user, setUser]                           = useState(null);
   const [loading, setLoading]                     = useState(true);
-  const [adminScreen, setAdminScreen]             = useState(() => localStorage.getItem('admin_screen') || 'Dashboard');
+  const [adminScreen, setAdminScreen]             = useState(() => {
+    // On web, prefer whatever the URL says (handles refresh / direct links)
+    // before falling back to localStorage. ClientDetail is the one exception:
+    // it needs an in-memory `client` object we don't have on a hard load, so
+    // we can't safely resume there — default to Dashboard instead.
+    if (isWeb) {
+      const screenFromPath = PATH_SCREENS[window.location.pathname];
+      if (screenFromPath && screenFromPath !== 'ClientDetail') return screenFromPath;
+    }
+    return localStorage.getItem('admin_screen') || 'Dashboard';
+  });
   const [adminParams, setAdminParams]             = useState(null);
 
   const [collapsed, setCollapsed]                 = useState(() => localStorage.getItem('sidebar_collapsed') === 'true');
@@ -84,22 +110,82 @@ export default function App() {
 
   const closeMobile = () => setMobileSidebarOpen(false);
 
+  // ─── Central navigation helper ────────────────────────────────────────────
+  // IMPORTANT: this is declared above the `loading` / `!user` early returns
+  // (unlike the old inline `navigate` further down) so that hooks above —
+  // like the popstate listener — can always safely reference it, even on
+  // renders where the user isn't logged in yet.
+  const navigate = (screen, params, { replace = false } = {}) => {
+    setAdminScreen(screen);
+    localStorage.setItem('admin_screen', screen);
+    setAdminParams(params || null);
+
+    if (isWeb) {
+      let path = SCREEN_PATHS[screen] || '/dashboard';
+      if (screen === 'ClientDetail' && params?.client?.id) {
+        path += `?id=${encodeURIComponent(params.client.id)}`;
+      }
+      const target = path;
+      const current = window.location.pathname + window.location.search;
+      if (current !== target) {
+        if (replace) window.history.replaceState({ screen }, '', target);
+        else window.history.pushState({ screen }, '', target);
+      }
+    }
+  };
+
+  // ─── Handle browser Back / Forward buttons ────────────────────────────────
+  useEffect(() => {
+    if (!isWeb) return;
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      const screen = PATH_SCREENS[path] || 'Dashboard';
+
+      // ClientDetail can't be reconstructed from the URL alone — we don't
+      // fetch a client by id anywhere in this file. If we don't already
+      // have the client object in memory, fall back to Dashboard instead
+      // of rendering a broken screen.
+      if (screen === 'ClientDetail' && !adminParams?.client) {
+        navigate('Dashboard', null, { replace: true });
+        return;
+      }
+
+      setAdminScreen(screen);
+      localStorage.setItem('admin_screen', screen);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [adminParams]);
+
   // ─── Session restore ──────────────────────────────────────────────────────
   useEffect(() => {
     const loadSession = async () => {
       try {
         const userData = await AsyncStorage.getItem('migme_user');
-        if (userData) setUser(JSON.parse(userData));
+        if (userData) {
+          setUser(JSON.parse(userData));
+          // Once we know the admin is logged in, make sure the URL matches
+          // whatever screen we resolved above (covers a fresh "/" load).
+          if (isWeb) {
+            const path = SCREEN_PATHS[adminScreen] || '/dashboard';
+            if (window.location.pathname !== path) {
+              window.history.replaceState({ screen: adminScreen }, '', path);
+            }
+          }
+        }
       } catch (e) { console.error('App.js loadSession error:', e); }
       setLoading(false);
     };
     loadSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleLogin = async (userData) => {
     setUser(userData);
     await AsyncStorage.setItem('migme_user', JSON.stringify(userData));
     await AsyncStorage.setItem('migme_role', 'admin');
+    // Land on the dashboard with a proper URL right after login.
+    navigate('Dashboard', null, { replace: true });
   };
 
   const handleLogout = async () => {
@@ -107,6 +193,9 @@ export default function App() {
     setAdminScreen('Dashboard');
     localStorage.removeItem('admin_screen');
     setMobileSidebarOpen(false);
+    if (isWeb) {
+      window.history.replaceState({}, '', '/');
+    }
     try { await signOut(auth); } catch (_) {}
     await AsyncStorage.removeItem('migme_user');
     await AsyncStorage.removeItem('migme_role');
@@ -176,11 +265,6 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════════════════════
   // ─── ADMIN VIEW ───────────────────────────────────────────────────────────
   // ═══════════════════════════════════════════════════════════════════════════
-  const navigate = (screen, params) => {
-    setAdminScreen(screen);
-    localStorage.setItem('admin_screen', screen);
-    setAdminParams(params);
-  };
 
   const renderAdminContent = () => {
     switch (adminScreen) {
