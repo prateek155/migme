@@ -594,13 +594,6 @@ export default function DashboardScreen({ clientId }) {
       .train-box { border: 2.5px solid #000; border-top: none; display: flex; margin: 0 0 10px 0; }
       .train-cell { flex: 1; text-align: center; padding: 8px 4px; font-size: 16px; font-weight: 900; }
       .train-cell.divider-right { border-right: 2.5px solid #000; }
-
-      /* ── Company logo watermark ── */
-      .watermark-wrap {
-        text-align: center;
-        margin: 10px 0;
-        line-height: 0;
-      }
     </style>
   </head>
   <body>
@@ -621,19 +614,6 @@ export default function DashboardScreen({ clientId }) {
       <thead class="items-head"><tr><th>Item</th><th>Qty</th></tr></thead>
       <tbody>${itemsHtml}</tbody>
     </table>
-    <!-- ── Company logo centered between items and totals ── -->
-    <div class="watermark-wrap">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="120" height="120" opacity="0.09">
-        <rect width="100" height="100" rx="18" fill="#121212"/>
-        <g transform="translate(28, 16) scale(1.82)">
-          <path d="M 2,0 H 16 L 24,8 V 32 Q 24,34 22,34 H 2 Q 0,34 0,32 V 2 Q 0,0 2,0 Z" fill="#FFFFFF"/>
-          <path d="M 16,0 L 16,8 L 24,8" fill="none" stroke="#cccccc" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="4" y1="15" x2="20" y2="15" stroke="#121212" stroke-width="2.8" stroke-linecap="round"/>
-          <line x1="4" y1="21" x2="20" y2="21" stroke="#121212" stroke-width="2.8" stroke-linecap="round"/>
-          <line x1="4" y1="27" x2="14" y2="27" stroke="#121212" stroke-width="2.8" stroke-linecap="round"/>
-        </g>
-      </svg>
-    </div>
     <hr class="divider"/>
     <table class="totals-table">
       <tr><td>Remarks:</td><td>${order.remark && order.remark.trim() !== '' ? order.remark : ''}</td></tr>
