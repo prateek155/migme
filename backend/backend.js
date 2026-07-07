@@ -1382,7 +1382,20 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
     for (const [fieldName, cfg] of Object.entries(domConfig.fields)) {
       let rawValue = null;
 
-      if (cfg.headerThIndex !== undefined && _thCells[cfg.headerThIndex]) {
+      // ✅ FIX 10 — heading-based extraction (h1-h6), e.g. "New Order
+      // Details (Order #45)". Purely additive — only runs when a vendor
+      // config explicitly sets cfg.headingMatch; every existing vendor's
+      // td/th-based fields (headerThIndex, labelText) are untouched.
+      if (cfg.headingMatch) {
+        $("h1, h2, h3, h4, h5, h6").each((_, el) => {
+          const headingText = $(el).text().replace(/\s+/g, " ").trim();
+          const m = headingText.match(cfg.headingMatch);
+          if (m) {
+            rawValue = m[1] !== undefined ? m[1].trim() : m[0].trim();
+            return false;
+          }
+        });
+      } else if (cfg.headerThIndex !== undefined && _thCells[cfg.headerThIndex]) {
         rawValue = _thCells[cfg.headerThIndex];
       } else {
         const labelsToTry = [cfg.labelText];
