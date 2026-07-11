@@ -101,7 +101,7 @@ const domConfig = {
     const raw = order._deliveryRaw || '';
     const m = raw.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{1,2}:\d{2})/);
     if (m) {
-      order.deliveryDate = `${m[3]}-${m[1]}-${m[2]}`;  // YYYY-MM-DD
+      order.deliveryDate = `${m[3]}-${m[2]}-${m[1]}`;  // YYYY-MM-DD (raw is DD/MM/YYYY)
       const t = m[4];
       order.deliveryTime = t.length === 4 ? '0' + t : t;
     } else {
