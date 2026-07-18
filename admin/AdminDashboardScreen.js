@@ -480,12 +480,6 @@ export default function AdminDashboardScreen({ onNavigate, onLogout }) {
   const [avgResponseMs] = useState(() => Math.floor(Math.random() * 120) + 80);
   const [lastSyncTime, setLastSyncTime] = useState(new Date());
 
-  // New system monitoring states
-  const [systemHealth, setSystemHealth] = useState(null);
-  const [systemLoad, setSystemLoad] = useState(0);
-  const [vendorMetrics, setVendorMetrics] = useState([]);
-  const [securityEvents, setSecurityEvents] = useState(0);
-
   const { width } = useWindowDimensions();
   const isMobile = width < MOBILE_BP;
 
@@ -532,75 +526,13 @@ export default function AdminDashboardScreen({ onNavigate, onLogout }) {
     return () => unsub();
   }, []);
 
-  // Fetch system health from backend
-  const fetchSystemHealth = useCallback(async () => {
-    try {
-      const BACKEND_URL =
-        process.env.EXPO_PUBLIC_BACKEND_URL || "http://localhost:3000";
-      const ADMIN_KEY =
-        process.env.EXPO_PUBLIC_ADMIN_KEY ||
-        "a3f8c2e1d94b7056f2a1c8e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b2d4";
-
-      // Fetch health
-      const healthRes = await fetch(`${BACKEND_URL}/health`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (healthRes.ok) {
-        const healthData = await healthRes.json();
-        setSystemHealth(healthData);
-        setSystemLoad(Math.min(100, (healthData.memoryUsageMB || 0) / 5)); // Convert to 0-100 scale
-      }
-
-      // Fetch vendor metrics
-      const vendorRes = await fetch(`${BACKEND_URL}/api/metrics/vendors`, {
-        headers: { "x-admin-key": ADMIN_KEY },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (vendorRes.ok) {
-        const vendorData = await vendorRes.json();
-        const vendorList = Object.entries(vendorData)
-          .slice(0, 5)
-          .map(([name, data]) => ({
-            name,
-            total: data.total || 0,
-            success: data.success || 0,
-            successRate:
-              data.total > 0
-                ? Math.round((data.success / data.total) * 100)
-                : 100,
-          }));
-        setVendorMetrics(vendorList);
-      }
-
-      // Fetch security events count
-      const securityRes = await fetch(`${BACKEND_URL}/api/security/audit`, {
-        headers: { "x-admin-key": ADMIN_KEY },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (securityRes.ok) {
-        const securityData = await securityRes.json();
-        setSecurityEvents((securityData.events || []).length);
-      }
-    } catch (error) {
-      // Silently fail - backend may not be available
-      console.log("System health fetch failed:", error.message);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchSystemHealth();
-    const interval = setInterval(fetchSystemHealth, 30000); // Update every 30 seconds
-    return () => clearInterval(interval);
-  }, [fetchSystemHealth]);
-
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    fetchSystemHealth();
     setTimeout(() => {
       setRefreshing(false);
       setLastSyncTime(new Date());
     }, 1200);
-  }, [fetchSystemHealth]);
+  }, []);
 
   // ── Derived analytics ────────────────────────────────────────────────────
   const activeClients = clients.filter((c) => c.active !== false).length;
@@ -851,96 +783,6 @@ export default function AdminDashboardScreen({ onNavigate, onLogout }) {
             ))}
           </View>
         </Animated.View>
-
-        {/* ── SYSTEM HEALTH & LOAD ── */}
-        <View style={styles.divider} />
-        <SectionHeader
-          icon="speedometer-outline"
-          title="System Health & Load"
-          sub="Real-time backend monitoring"
-          color={C.purple}
-        />
-
-        {systemHealth && (
-          <View
-            style={[styles.metricsGrid, isMobile && styles.metricsGridMobile]}
-          >
-            <MetricTile
-              icon="hardware-chip-outline"
-              label="Memory Usage"
-              value={`${systemHealth.memoryUsageMB || 0}MB`}
-              color={systemHealth.memoryUsageMB > 400 ? C.danger : C.success}
-              sub={`${Math.round((systemHealth.memoryUsageMB / 500) * 100)}% of limit`}
-            />
-            <MetricTile
-              icon="speedometer-outline"
-              label="System Load"
-              value={`${Math.round(systemLoad)}%`}
-              color={
-                systemLoad > 80
-                  ? C.danger
-                  : systemLoad > 60
-                    ? C.warn
-                    : C.success
-              }
-              pct={Math.round(systemLoad)}
-            />
-            <MetricTile
-              icon="time-outline"
-              label="Uptime"
-              value={systemHealth.uptimeFormatted || "N/A"}
-              color={C.teal}
-              sub="Since last restart"
-            />
-            <MetricTile
-              icon="server-outline"
-              label="Active Pollers"
-              value={systemHealth.activePollers || 0}
-              color={C.accent}
-              sub="IMAP connections"
-            />
-            <MetricTile
-              icon="shield-checkmark-outline"
-              label="Security Events"
-              value={securityEvents}
-              color={securityEvents > 10 ? C.danger : C.success}
-              sub="Last 24 hours"
-            />
-          </View>
-        )}
-
-        {/* ── VENDOR PERFORMANCE ── */}
-        {vendorMetrics.length > 0 && (
-          <View style={{ marginTop: 20 }}>
-            <SectionHeader
-              icon="cube-outline"
-              title="Top Vendor Performance"
-              sub="Order processing metrics"
-              color={C.accent}
-            />
-            <View
-              style={[styles.metricsGrid, isMobile && styles.metricsGridMobile]}
-            >
-              {vendorMetrics.map((vendor, idx) => (
-                <MetricTile
-                  key={idx}
-                  icon="receipt-outline"
-                  label={vendor.name}
-                  value={vendor.total}
-                  color={
-                    vendor.successRate > 90
-                      ? C.success
-                      : vendor.successRate > 70
-                        ? C.warn
-                        : C.danger
-                  }
-                  pct={vendor.successRate}
-                  sub={`${vendor.success}/${vendor.total} successful`}
-                />
-              ))}
-            </View>
-          </View>
-        )}
 
         {/* ── SYSTEM ANALYTICS HEADER ── */}
         <View style={styles.divider} />
@@ -1458,19 +1300,31 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: C.border,
-    padding: 16,
+    padding: 20,
   },
   trendBarsRow: {
     flexDirection: "row",
-    height: 80,
-    alignItems: "flex-end",
-    gap: 6,
+    height: 220,
+    alignItems: "stretch",
+    gap: 10,
   },
-  trendBarCol: { flex: 1, alignItems: "center", gap: 4 },
-  trendBarValue: { fontSize: 9, color: C.textThird, height: 12 },
-  trendBarTrack: { flex: 1, width: "100%", justifyContent: "flex-end" },
-  trendBarFill: { width: "100%", borderRadius: 3 },
-  trendBarDay: { fontSize: 9, color: C.textThird, fontWeight: "600" },
+  trendBarCol: { flex: 1, alignItems: "center", gap: 6 },
+  trendBarValue: {
+    fontSize: 13,
+    color: C.textPrimary,
+    fontWeight: "700",
+    height: 18,
+  },
+  trendBarTrack: {
+    flex: 1,
+    width: "100%",
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderRadius: 6,
+    overflow: "hidden",
+  },
+  trendBarFill: { width: "100%", borderRadius: 6, minHeight: 6 },
+  trendBarDay: { fontSize: 11, color: C.textThird, fontWeight: "600" },
 
   // ── Activity log ──────────────────────────────────────────────────────────
   activityCard: {
