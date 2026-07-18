@@ -1,176 +1,33 @@
 import { useState, useEffect, useCallback } from "react";
 
 /* ═══════════════════════════════════════════════════════════════
-   FIREBASE — DIRECT FIRESTORE ACCESS (no backend API for this screen)
-   ─────────────────────────────────────────────────────────────
-   ⚠️ Why this changed from the backend-API version:
-   The old version called Api.getClients() etc. → your Express backend
-   on Railway → Firestore Admin SDK. That added a network hop through
-   a custom domain (docket-backend.up.railway.app), which meant every
-   read/write here was exposed to Railway DNS hiccups, CORS config,
-   and backend uptime — none of which have anything to do with this
-   screen's actual job (CRUD on two Firestore collections).
-
-   This version talks to Firestore directly from the browser using the
-   Firebase client SDK. Firestore's own infra handles resolution/CORS,
-   so those failure classes disappear for this screen. Security moves
-   from the backend's `x-admin-key` header check to Firestore Security
-   Rules — see the REQUIRED RULES comment below. This is safe ONLY
-   because this app already has Firebase Auth login; without auth,
-   client-side Firestore access would need to be public, which you do
-   NOT want for billing data.
-
-   REQUIRED Firestore Security Rules (add/merge into firestore.rules):
-
-     match /billing_clients/{clientId} {
-       allow read, write: if request.auth != null;
-     }
-     match /billing_payments/{paymentId} {
-       allow read, write: if request.auth != null;
-     }
-
-   (Tighten further with request.auth.token.admin == true + a custom
-   claim if you want to restrict this to specific admin users only,
-   rather than any authenticated user.)
+   BACKEND CONFIG — same env vars as AddClientScreen.jsx
 ═══════════════════════════════════════════════════════════════ */
-import { initializeApp, getApps, getApp } from "firebase/app";
-import {
-  getFirestore,
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  query,
-  where,
-  writeBatch,
-} from "firebase/firestore";
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const ADMIN_KEY = process.env.EXPO_PUBLIC_ADMIN_API_KEY || "";
 
-const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-};
-
-// getApps()/getApp() guard — other screens (e.g. AddClientScreen.jsx)
-// already call initializeApp() with this same config. Calling it again
-// with the default app name throws "Firebase App named '[DEFAULT]'
-// already exists" — this pattern is safe regardless of import order.
-const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
-
-const CLIENTS_COL = "billing_clients";
-const PAYMENTS_COL = "billing_payments";
+async function apiFetch(path, options = {}) {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "x-admin-key": ADMIN_KEY,
+      ...(options.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
 
 const Api = {
-  getClients: async () => {
-    const snap = await getDocs(collection(db, CLIENTS_COL));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  },
-
-  createClient: async (payload) => {
-    const docRef = await addDoc(collection(db, CLIENTS_COL), {
-      clientName: (payload.clientName || "").trim(),
-      restaurantName: (payload.restaurantName || "").trim(),
-      phone: (payload.phone || "").trim(),
-      email: (payload.email || "").trim().toLowerCase(),
-      state: payload.state,
-      city: payload.city,
-      startDate: payload.startDate,
-      priceType: payload.priceType,
-      amount: Number(payload.amount),
-      notes: payload.notes || "",
-      gst: payload.gst || "",
-      active: true,
-      createdAt: new Date().toISOString(),
-    });
-    const saved = await getDoc(docRef);
-    return { id: docRef.id, ...saved.data() };
-  },
-
-  updateClient: async (id, payload) => {
-    const ref = doc(db, CLIENTS_COL, id);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) throw new Error("Client not found");
-    await updateDoc(ref, {
-      clientName: (payload.clientName || "").trim(),
-      restaurantName: (payload.restaurantName || "").trim(),
-      phone: (payload.phone || "").trim(),
-      email: (payload.email || "").trim().toLowerCase(),
-      state: payload.state,
-      city: payload.city,
-      startDate: payload.startDate,
-      priceType: payload.priceType,
-      amount: Number(payload.amount),
-      notes: payload.notes || "",
-      gst: payload.gst || "",
-      updatedAt: new Date().toISOString(),
-    });
-    const updated = await getDoc(ref);
-    return { id, ...updated.data() };
-  },
-
-  toggleClient: async (id) => {
-    const ref = doc(db, CLIENTS_COL, id);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) throw new Error("Client not found");
-    const newActive = !snap.data().active;
-    await updateDoc(ref, { active: newActive, updatedAt: new Date().toISOString() });
-    return { id, active: newActive };
-  },
-
-  deleteClient: async (id) => {
-    const ref = doc(db, CLIENTS_COL, id);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) throw new Error("Client not found");
-    await deleteDoc(ref);
-
-    // cascade-delete this client's payments, same as the old backend did
-    const paySnap = await getDocs(
-      query(collection(db, PAYMENTS_COL), where("clientId", "==", id)),
-    );
-    let deletedPayments = 0;
-    if (!paySnap.empty) {
-      const batch = writeBatch(db);
-      paySnap.forEach((d) => {
-        batch.delete(d.ref);
-        deletedPayments++;
-      });
-      await batch.commit();
-    }
-    return { deleted: id, deletedPayments };
-  },
-
-  getPayments: async () => {
-    const snap = await getDocs(collection(db, PAYMENTS_COL));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  },
-
-  createPayment: async (payload) => {
-    const { clientId, amount, date, note, mode } = payload;
-    if (!clientId || !amount || Number(amount) <= 0 || !date) {
-      throw new Error("Missing required fields: clientId, amount, date");
-    }
-    const clientRef = doc(db, CLIENTS_COL, clientId);
-    const clientSnap = await getDoc(clientRef);
-    if (!clientSnap.exists()) throw new Error("Client not found");
-
-    const docRef = await addDoc(collection(db, PAYMENTS_COL), {
-      clientId,
-      amount: Number(amount),
-      date,
-      note: note || "",
-      mode: mode || "cash",
-      createdAt: new Date().toISOString(),
-    });
-    const saved = await getDoc(docRef);
-    return { id: docRef.id, ...saved.data() };
-  },
+  getClients:    ()          => apiFetch("/api/billing-clients"),
+  createClient:  (payload)   => apiFetch("/api/billing-clients", { method: "POST", body: JSON.stringify(payload) }),
+  updateClient:  (id, payload) => apiFetch(`/api/billing-clients/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  toggleClient:  (id)         => apiFetch(`/api/billing-clients/${id}/toggle`, { method: "PATCH" }),
+  deleteClient:  (id)         => apiFetch(`/api/billing-clients/${id}`, { method: "DELETE" }),
+  getPayments:   ()          => apiFetch("/api/billing-payments"),
+  createPayment: (payload)   => apiFetch("/api/billing-payments", { method: "POST", body: JSON.stringify(payload) }),
 };
 
 /* ─── TABLER ICONS (CDN) ────────────────────────────────────── */
@@ -1072,7 +929,7 @@ const BLANK_CLIENT = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   MAIN APP — now just orchestrates state + Firestore calls
+   MAIN APP — now just orchestrates state + backend calls
 ═══════════════════════════════════════════════════════════════ */
 export default function App() {
 
@@ -1110,7 +967,7 @@ export default function App() {
 
   const showToast = (msg, type="success") => setToast({ msg, type });
 
-  /* ── load data directly from Firestore ───────────────────────── */
+  /* ── load real data from backend ─────────────────────────────── */
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -1173,7 +1030,7 @@ export default function App() {
     setDrawer(null); setFormErr({}); setEditMode(false); setForm(BLANK_CLIENT);
   };
 
-  /* ── CREATE / UPDATE client — direct Firestore write ─────────── */
+  /* ── CREATE / UPDATE client — hits backend, no more local-only state ── */
   const submitClient = async () => {
     const e = validateClient();
     if (Object.keys(e).length) { setFormErr(e); return; }
@@ -1197,7 +1054,7 @@ export default function App() {
     setSaving(false);
   };
 
-  /* ── CREATE payment — direct Firestore write ─────────────────── */
+  /* ── CREATE payment — hits backend ───────────────────────────── */
   const submitPayment = async () => {
     if (!payForm.clientId||!payForm.amount||Number(payForm.amount)<=0||!payForm.date) {
       showToast("Fill all required fields","error"); return;
@@ -1221,7 +1078,7 @@ export default function App() {
     setSaving(false);
   };
 
-  /* ── DELETE client — direct Firestore delete (cascades payments) */
+  /* ── DELETE client — hits backend (server cascades payments) ──── */
   const deleteClient = async (id) => {
     setDeleting(true);
     try {
@@ -1236,7 +1093,7 @@ export default function App() {
     setDeleting(false);
   };
 
-  /* ── TOGGLE active — direct Firestore update ─────────────────── */
+  /* ── TOGGLE active — hits backend ────────────────────────────── */
   const toggleActive = async (c) => {
     try {
       const { active } = await Api.toggleClient(c.id);
