@@ -577,10 +577,22 @@ const VendorDetail = ({ vendor, orders, onBack, onExport, statusFilter, isMobile
     } catch { showToast('Failed to read file. Please try a valid .xlsx or .csv.', 'error'); }
   };
 
+  // Orders belonging to this vendor, filtered down to whatever status the
+  // main screen currently has selected (All / Completed / Cancelled / Delivered).
+  // This is the single source of truth for the summary cards AND compare —
+  // both must agree with each other and with the main screen's numbers.
+  const statusFilteredOrders = orders.filter(o => {
+    if (statusFilter === 'All')       return o.status === 'Completed' || o.status === 'Delivered' || o.status === 'Cancelled';
+    if (statusFilter === 'Completed') return o.status === 'Completed';
+    if (statusFilter === 'Cancelled') return o.status === 'Cancelled';
+    if (statusFilter === 'Delivered') return o.status === 'Delivered' || o.status === 'Completed';
+    return true;
+  });
+
   const compareOrders = () => {
     if (!uploadedOrders.length) { showToast('Upload vendor file first.', 'warning'); return; }
 
-    const sysRaw  = orders.map(o => String(o.orderNo || '').trim());
+    const sysRaw  = statusFilteredOrders.map(o => String(o.orderNo || '').trim());
     const sysNorm = sysRaw.map(id => id.toLowerCase());
     const upRaw   = uploadedOrders.map(id => id.trim());
     const upNorm  = upRaw.map(id => id.toLowerCase());
@@ -609,13 +621,14 @@ const VendorDetail = ({ vendor, orders, onBack, onExport, statusFilter, isMobile
     }
   };
 
-  const completedForCalc = orders.filter(o => o.status === 'Completed' || o.status === 'Delivered');
+  // Summary cards now respect statusFilter too, so they match the main screen exactly.
+  const completedForCalc = statusFilteredOrders.filter(o => o.status === 'Completed' || o.status === 'Delivered');
   const totalRevenue     = completedForCalc.reduce((s, o) => s + (o.totalAmount || 0), 0);
   const codRevenue       = completedForCalc.filter(o => normPayment(o.paymentType) === 'COD').reduce((s, o) => s + (o.totalAmount || 0), 0);
   const onlineRevenue    = completedForCalc.filter(o => normPayment(o.paymentType) === 'ONLINE').reduce((s, o) => s + (o.totalAmount || 0), 0);
   const codCount         = completedForCalc.filter(o => normPayment(o.paymentType) === 'COD').length;
   const onlineCount      = completedForCalc.filter(o => normPayment(o.paymentType) === 'ONLINE').length;
-  const totalOrderCount  = orders.filter(o => ['Completed','Delivered','Cancelled'].includes(o.status)).length;
+  const totalOrderCount  = statusFilteredOrders.length;
 
   const displayOrders = orders.filter(o => {
     const q = search.toLowerCase();
