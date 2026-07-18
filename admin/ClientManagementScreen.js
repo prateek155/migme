@@ -1,80 +1,33 @@
 import { useState, useEffect, useCallback } from "react";
-import {
-  collection,
-  doc,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  getDoc,
-  getDocs,
-  query,
-  where,
-  writeBatch,
-} from "firebase/firestore";
-import { db } from "../src/firebaseConfig";
 
 /* ═══════════════════════════════════════════════════════════════
-   FIRESTORE DATA LAYER — no backend server involved.
-   Reads/writes go straight to Firestore from the client, using the
-   same `db` instance every other screen in this app already uses.
-
-   Collections:
-     billingClients   — one doc per client (was /api/billing-clients)
-     billingPayments   — one doc per payment (was /api/billing-payments)
+   BACKEND CONFIG — same env vars as AddClientScreen.jsx
 ═══════════════════════════════════════════════════════════════ */
-const CLIENTS_COL  = "billingClients";
-const PAYMENTS_COL = "billingPayments";
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const ADMIN_KEY = process.env.EXPO_PUBLIC_ADMIN_API_KEY || "";
 
-const withId = (d) => ({ id: d.id, ...d.data() });
+async function apiFetch(path, options = {}) {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "x-admin-key": ADMIN_KEY,
+      ...(options.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
 
 const Api = {
-  getClients: async () => {
-    const snap = await getDocs(collection(db, CLIENTS_COL));
-    return snap.docs.map(withId);
-  },
-
-  createClient: async (payload) => {
-    const data = { ...payload, active: true };
-    const ref = await addDoc(collection(db, CLIENTS_COL), data);
-    return { id: ref.id, ...data };
-  },
-
-  updateClient: async (id, payload) => {
-    await updateDoc(doc(db, CLIENTS_COL, id), payload);
-    const snap = await getDoc(doc(db, CLIENTS_COL, id));
-    return withId(snap);
-  },
-
-  toggleClient: async (id) => {
-    const ref = doc(db, CLIENTS_COL, id);
-    const snap = await getDoc(ref);
-    const current = snap.exists() ? snap.data().active !== false : true;
-    const next = !current;
-    await updateDoc(ref, { active: next });
-    return { active: next };
-  },
-
-  deleteClient: async (id) => {
-    // cascade-delete this client's payments, then the client doc itself
-    const paySnap = await getDocs(
-      query(collection(db, PAYMENTS_COL), where("clientId", "==", id)),
-    );
-    const batch = writeBatch(db);
-    paySnap.docs.forEach((d) => batch.delete(d.ref));
-    batch.delete(doc(db, CLIENTS_COL, id));
-    await batch.commit();
-    return { success: true };
-  },
-
-  getPayments: async () => {
-    const snap = await getDocs(collection(db, PAYMENTS_COL));
-    return snap.docs.map(withId);
-  },
-
-  createPayment: async (payload) => {
-    const ref = await addDoc(collection(db, PAYMENTS_COL), payload);
-    return { id: ref.id, ...payload };
-  },
+  getClients:    ()          => apiFetch("/api/billing-clients"),
+  createClient:  (payload)   => apiFetch("/api/billing-clients", { method: "POST", body: JSON.stringify(payload) }),
+  updateClient:  (id, payload) => apiFetch(`/api/billing-clients/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  toggleClient:  (id)         => apiFetch(`/api/billing-clients/${id}/toggle`, { method: "PATCH" }),
+  deleteClient:  (id)         => apiFetch(`/api/billing-clients/${id}`, { method: "DELETE" }),
+  getPayments:   ()          => apiFetch("/api/billing-payments"),
+  createPayment: (payload)   => apiFetch("/api/billing-payments", { method: "POST", body: JSON.stringify(payload) }),
 };
 
 /* ─── TABLER ICONS (CDN) ────────────────────────────────────── */
@@ -976,7 +929,7 @@ const BLANK_CLIENT = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   MAIN APP — orchestrates state + direct Firestore calls
+   MAIN APP — now just orchestrates state + backend calls
 ═══════════════════════════════════════════════════════════════ */
 export default function App() {
 
@@ -1014,7 +967,7 @@ export default function App() {
 
   const showToast = (msg, type="success") => setToast({ msg, type });
 
-  /* ── load real data straight from Firestore ──────────────────── */
+  /* ── load real data from backend ─────────────────────────────── */
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -1077,7 +1030,7 @@ export default function App() {
     setDrawer(null); setFormErr({}); setEditMode(false); setForm(BLANK_CLIENT);
   };
 
-  /* ── CREATE / UPDATE client — direct Firestore write ─────────── */
+  /* ── CREATE / UPDATE client — hits backend, no more local-only state ── */
   const submitClient = async () => {
     const e = validateClient();
     if (Object.keys(e).length) { setFormErr(e); return; }
@@ -1101,7 +1054,7 @@ export default function App() {
     setSaving(false);
   };
 
-  /* ── CREATE payment — direct Firestore write ─────────────────── */
+  /* ── CREATE payment — hits backend ───────────────────────────── */
   const submitPayment = async () => {
     if (!payForm.clientId||!payForm.amount||Number(payForm.amount)<=0||!payForm.date) {
       showToast("Fill all required fields","error"); return;
@@ -1125,7 +1078,7 @@ export default function App() {
     setSaving(false);
   };
 
-  /* ── DELETE client — direct Firestore write (cascades payments) ── */
+  /* ── DELETE client — hits backend (server cascades payments) ──── */
   const deleteClient = async (id) => {
     setDeleting(true);
     try {
@@ -1140,7 +1093,7 @@ export default function App() {
     setDeleting(false);
   };
 
-  /* ── TOGGLE active — direct Firestore write ──────────────────── */
+  /* ── TOGGLE active — hits backend ────────────────────────────── */
   const toggleActive = async (c) => {
     try {
       const { active } = await Api.toggleClient(c.id);
