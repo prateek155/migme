@@ -186,8 +186,8 @@ export default function AddClientScreen({ onBack }) {
         <TouchableOpacity onPress={onBack} style={s.backBtn}>
           <Ionicons name="arrow-back" size={17} color="#9ca3af" />
         </TouchableOpacity>
-        <Text style={s.heading}>Add new client</Text>
-        <Text style={s.breadcrumb}>Clients / New</Text>
+        <Text style={s.heading} numberOfLines={1}>Add new client</Text>
+        {isDesktop && <Text style={s.breadcrumb}>Clients / New</Text>}
       </View>
 
       <ScrollView
@@ -285,19 +285,31 @@ export default function AddClientScreen({ onBack }) {
             </View>
 
             {/* Client login password */}
+            {/*
+              FIX: on narrow (mobile) widths this row used to stay
+              flexDirection:'row' with the input taking flex:1 and the
+              "Generate" button sized to its own content. When the
+              screen (or the space left after any outer nav rail) got
+              narrow, the button had no room left and its label got
+              visually clipped ("Generat…").
+              Now on mobile it stacks: input on top, full-width
+              "Generate" button below — nothing can get cut off.
+              Desktop keeps the original side-by-side layout.
+            */}
             <View style={s.field}>
               <Text style={s.label}>Client login password</Text>
-              <View style={s.passwordRow}>
+              <View style={[s.passwordRow, !isDesktop && s.passwordRowMobile]}>
                 <TextInput
-                  style={s.passwordInput}
+                  style={[s.passwordInput, !isDesktop && s.passwordInputMobile]}
                   placeholder="Generate or type a password"
                   placeholderTextColor="#4b5563"
                   value={generatedPassword}
                   onChangeText={setGeneratedPassword}
                 />
                 <TouchableOpacity
-                  style={s.genBtn}
+                  style={[s.genBtn, !isDesktop && s.genBtnMobile]}
                   onPress={() => setGeneratedPassword(generatePassword())}
+                  activeOpacity={0.85}
                 >
                   <Ionicons name="refresh" size={15} color="#fff" />
                   <Text style={s.genBtnText}>Generate</Text>
@@ -344,12 +356,12 @@ export default function AddClientScreen({ onBack }) {
             )}
 
             {/* Actions */}
-            <View style={s.actions}>
-              <TouchableOpacity style={s.cancelBtn} onPress={onBack}>
+            <View style={[s.actions, !isDesktop && s.actionsMobile]}>
+              <TouchableOpacity style={[s.cancelBtn, !isDesktop && s.actionBtnMobile]} onPress={onBack}>
                 <Text style={s.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[s.saveBtn, (!allValid || loading) && s.saveBtnDisabled]}
+                style={[s.saveBtn, !isDesktop && s.actionBtnMobile, (!allValid || loading) && s.saveBtnDisabled]}
                 onPress={handleCreateClient}
                 disabled={!allValid || loading}
               >
@@ -384,8 +396,8 @@ const s = StyleSheet.create({
 
   // Top bar
   topBar:               { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingVertical: 14, backgroundColor: '#1f2937', borderBottomWidth: 1, borderColor: '#374151' },
-  backBtn:              { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#374151', justifyContent: 'center', alignItems: 'center' },
-  heading:              { fontSize: 16, fontWeight: '600', color: '#f9fafb' },
+  backBtn:              { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#374151', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  heading:              { fontSize: 16, fontWeight: '600', color: '#f9fafb', flexShrink: 1 },
   breadcrumb:           { marginLeft: 'auto', fontSize: 13, color: '#6b7280' },
 
   // Scroll + layout
@@ -425,10 +437,16 @@ const s = StyleSheet.create({
   iconBtn:              { position: 'absolute', right: 12, padding: 2 },
 
   // Password row
+  // Desktop: input + button side-by-side (original layout)
   passwordRow:          { flexDirection: 'row', gap: 8, marginBottom: 7 },
   passwordInput:        { flex: 1, borderWidth: 1, borderColor: '#374151', borderRadius: 8, paddingVertical: 11, paddingHorizontal: 14, fontSize: 14, color: '#f9fafb', backgroundColor: '#111827' },
-  genBtn:               { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#3b82f6', paddingHorizontal: 16, borderRadius: 8 },
+  genBtn:               { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#3b82f6', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 8 },
   genBtnText:           { color: '#fff', fontWeight: '600', fontSize: 13 },
+  // Mobile: stack input above a full-width button so "Generate" never
+  // gets squeezed/clipped by limited horizontal space.
+  passwordRowMobile:    { flexDirection: 'column', gap: 8 },
+  passwordInputMobile:  { flex: 0, width: '100%' },
+  genBtnMobile:         { width: '100%', paddingVertical: 12 },
 
   // Strength bar
   strengthRow:          { flexDirection: 'row', gap: 4, marginBottom: 5 },
@@ -444,7 +462,9 @@ const s = StyleSheet.create({
 
   // Actions
   actions:              { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 24, paddingTop: 18, borderTopWidth: 1, borderColor: '#374151' },
-  cancelBtn:            { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, borderWidth: 1, borderColor: '#374151', backgroundColor: 'transparent' },
+  actionsMobile:        { flexDirection: 'column-reverse' },
+  actionBtnMobile:      { width: '100%', justifyContent: 'center' },
+  cancelBtn:            { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, borderWidth: 1, borderColor: '#374151', backgroundColor: 'transparent', alignItems: 'center' },
   cancelBtnText:        { color: '#9ca3af', fontWeight: '600', fontSize: 13 },
   saveBtn:              { flexDirection: 'row', gap: 7, alignItems: 'center', backgroundColor: '#3b82f6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 },
   saveBtnDisabled:      { opacity: 0.4 },
