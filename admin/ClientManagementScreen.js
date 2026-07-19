@@ -1,34 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
+import {
+  collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc,
+  query, where, getDocs, writeBatch,
+} from "firebase/firestore";
+// ⚠️ Adjust this relative path to match where firebaseConfig.js actually lives
+// (same pattern already used in AddOrderScreen.js: `import { db } from '../firebaseConfig';`)
+import { db } from "../firebaseConfig";
 
 /* ═══════════════════════════════════════════════════════════════
-   BACKEND CONFIG — same env vars as AddClientScreen.jsx
+   FIRESTORE COLLECTIONS
+   billingClients  -> one doc per client (subscription/billing record)
+   billingPayments -> one doc per payment, references clientId
+   No backend/API layer anymore — everything reads & writes Firestore
+   directly and stays in sync in realtime via onSnapshot, exactly like
+   AddOrderScreen.js does for orders/categories/menuItems.
 ═══════════════════════════════════════════════════════════════ */
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
-const ADMIN_KEY = process.env.EXPO_PUBLIC_ADMIN_API_KEY || "";
-
-async function apiFetch(path, options = {}) {
-  const res = await fetch(`${BACKEND_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "x-admin-key": ADMIN_KEY,
-      ...(options.headers || {}),
-    },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
-}
-
-const Api = {
-  getClients:    ()          => apiFetch("/api/billing-clients"),
-  createClient:  (payload)   => apiFetch("/api/billing-clients", { method: "POST", body: JSON.stringify(payload) }),
-  updateClient:  (id, payload) => apiFetch(`/api/billing-clients/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
-  toggleClient:  (id)         => apiFetch(`/api/billing-clients/${id}/toggle`, { method: "PATCH" }),
-  deleteClient:  (id)         => apiFetch(`/api/billing-clients/${id}`, { method: "DELETE" }),
-  getPayments:   ()          => apiFetch("/api/billing-payments"),
-  createPayment: (payload)   => apiFetch("/api/billing-payments", { method: "POST", body: JSON.stringify(payload) }),
-};
 
 /* ─── TABLER ICONS (CDN) ────────────────────────────────────── */
 const IconsLoader = () => (
@@ -89,17 +75,16 @@ const T = {
   t3:          "#4a5568",
 };
 
+/* ─── RESPONSIVE BREAKPOINTS ────────────────────────────────── */
+// mobile  : < 640px   (phones)
+// tablet  : 640–1023px (tablets, small laptops split-view)
+// desktop : >= 1024px
+const getScreenSize = (w) => (w < 640 ? "mobile" : w < 1024 ? "tablet" : "desktop");
+
 /* ═══════════════════════════════════════════════════════════════
-   ⚠️ IMPORTANT: every component below lives at MODULE scope
-   (outside App). That is the actual fix for the "cursor jumps to
-   first field on every keystroke" bug — these were previously
-   declared INSIDE the App() function body, so every re-render
-   (which happens on every keystroke via setState) created a brand
-   new function/component identity. React then treated <ClientForm/>,
-   <Inp/>, etc. as a totally different component type on each render
-   and unmounted + remounted the whole subtree — which kills focus
-   on any <input> inside it. Keeping them here means their identity
-   never changes across renders, so React just updates props in place.
+   All sub-components live at MODULE scope (outside App) so their
+   identity never changes across renders — keeps input focus stable
+   on every keystroke (same fix already applied in the billing UI).
 ═══════════════════════════════════════════════════════════════ */
 
 const Sk = ({ w="100%", h=14, r=6 }) => (
@@ -235,18 +220,19 @@ const Stat = ({ icon, label, value, sub, col=T.accent }) => (
   </div>
 );
 
-/* ─── DRAWER ─────────────────────────────────────────────────── */
-const Drawer = ({ open, onClose, title, subtitle, children, width=490 }) => {
+/* ─── DRAWER (full-screen on mobile, panel on tablet/desktop) ── */
+const Drawer = ({ open, onClose, title, subtitle, children, width=490, fullOnMobile=true }) => {
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [open]);
   if (!open) return null;
+  const cappedWidth = fullOnMobile ? `min(${width}px, 100vw)` : `${width}px`;
   return (
     <div style={{ position:"fixed", inset:0, zIndex:200, display:"flex" }}>
       <div style={{ flex:1, background:"rgba(0,0,0,0.65)", backdropFilter:"blur(3px)" }}
         onClick={onClose} />
-      <div style={{ width:`min(${width}px,100vw)`, background:T.surface,
+      <div style={{ width:cappedWidth, background:T.surface,
         borderLeft:`1px solid ${T.border}`, display:"flex", flexDirection:"column",
         height:"100%", animation:"slideIn 0.22s cubic-bezier(.22,.9,.36,1)" }}>
         <div style={{ padding:"18px 22px 14px", borderBottom:`1px solid ${T.border}`,
@@ -299,15 +285,27 @@ const Toast = ({ msg, type="success", onHide }) => {
       background:T.surface, border:`1px solid ${col}40`, borderRadius:12,
       padding:"12px 20px", display:"flex", alignItems:"center", gap:10,
       zIndex:500, boxShadow:"0 8px 32px rgba(0,0,0,0.55)",
-      animation:"fadeUp 0.25s ease", whiteSpace:"nowrap" }}>
-      <i className={`ti ${ICO[type]||ICO.success}`} style={{ color:col, fontSize:18 }} />
-      <span style={{ fontSize:14, color:T.t1 }}>{msg}</span>
+      animation:"fadeUp 0.25s ease", maxWidth:"92vw", whiteSpace:"nowrap",
+      overflow:"hidden", textOverflow:"ellipsis" }}>
+      <i className={`ti ${ICO[type]||ICO.success}`} style={{ color:col, fontSize:18, flexShrink:0 }} />
+      <span style={{ fontSize:14, color:T.t1, overflow:"hidden", textOverflow:"ellipsis" }}>{msg}</span>
     </div>
   );
 };
 
+/* ─── LIVE SYNC BADGE (replaces the old manual "Refresh" button) ─ */
+const LiveBadge = ({ compact=false }) => (
+  <span style={{ display:"flex", alignItems:"center", gap:6,
+    background:T.greenDim, border:`1px solid ${T.green}30`,
+    padding:compact?"5px 8px":"6px 12px", borderRadius:20 }}>
+    <span style={{ width:7, height:7, borderRadius:99, background:T.green,
+      animation:"pulseDot 1.6s ease infinite" }} />
+    {!compact && <span style={{ fontSize:12, fontWeight:600, color:T.green }}>Live</span>}
+  </span>
+);
+
 /* ═══════════════════════════════════════════════════════════════
-   CLIENT FORM — hoisted out, takes everything via props
+   CLIENT FORM
 ═══════════════════════════════════════════════════════════════ */
 const ClientForm = ({ form, formErr, setF, stateOpts, cityOpts, editMode, saving, onCancel, onSubmit }) => (
   <div style={{display:"flex",flexDirection:"column",gap:18}}>
@@ -649,7 +647,7 @@ const Dashboard = ({
     </div>
 
     {!loading&&<>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
         {[["Paid",paidCnt,T.green,"ti-circle-check"],["Partial",partialCnt,T.amber,"ti-circle-half-2"],["Pending",pendingCnt,T.red,"ti-circle-x"]].map(([l,v,col,ic])=>(
           <div key={l} onClick={()=>onStatusFilter(l.toLowerCase())}
             style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,
@@ -750,7 +748,7 @@ const ClientsTab = ({
       )}
     </div>
 
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8}}>
+    <div style={{display:"grid",gridTemplateColumns:isMobile?"repeat(2,1fr)":"repeat(auto-fit,minmax(110px,1fr))",gap:8}}>
       <Sel value={fState} onChange={v=>setFState(v)}
         options={[{v:"all",l:"All states"},...stateOpts.map(s=>({v:s,l:s}))]} />
       <Sel value={fCity} onChange={v=>setFCity(v)}
@@ -929,7 +927,9 @@ const BLANK_CLIENT = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   MAIN APP — now just orchestrates state + backend calls
+   MAIN APP — orchestrates state + direct Firestore reads/writes.
+   No backend, no API layer, no admin key: exactly the same pattern
+   AddOrderScreen.js already uses (onSnapshot + addDoc/updateDoc).
 ═══════════════════════════════════════════════════════════════ */
 export default function App() {
 
@@ -944,9 +944,13 @@ export default function App() {
   const [deleting,   setDeleting]   = useState(false);
   const [toast,      setToast]      = useState(null);
   const [editMode,   setEditMode]   = useState(false);
-  const [isMobile,   setIsMobile]   = useState(
-    typeof window !== "undefined" ? window.innerWidth < 620 : false
+
+  const [screenSize, setScreenSize] = useState(
+    typeof window !== "undefined" ? getScreenSize(window.innerWidth) : "desktop"
   );
+  const isMobile  = screenSize === "mobile";
+  const isTablet  = screenSize === "tablet";
+  const isDesktop = screenSize === "desktop";
 
   const [fState,  setFState]  = useState("all");
   const [fCity,   setFCity]   = useState("all");
@@ -959,31 +963,38 @@ export default function App() {
   const [formErr, setFormErr] = useState({});
   const [payForm, setPayForm] = useState({ clientId:"", amount:"", date:todayStr(), note:"", mode:"cash" });
 
+  /* ── responsive listener ─────────────────────────────────────── */
   useEffect(() => {
-    const fn = () => setIsMobile(window.innerWidth < 620);
+    const fn = () => setScreenSize(getScreenSize(window.innerWidth));
     window.addEventListener("resize", fn);
     return () => window.removeEventListener("resize", fn);
   }, []);
 
   const showToast = (msg, type="success") => setToast({ msg, type });
 
-  /* ── load real data from backend ─────────────────────────────── */
-  const loadAll = useCallback(async () => {
+  /* ── realtime Firestore sync — replaces the old loadAll() + API calls ── */
+  useEffect(() => {
     setLoading(true);
-    try {
-      const [clientsData, paymentsData] = await Promise.all([
-        Api.getClients(),
-        Api.getPayments(),
-      ]);
-      setClients(clientsData || []);
-      setPayments(paymentsData || []);
-    } catch (e) {
-      showToast(e.message || "Failed to load data", "error");
-    }
-    setLoading(false);
+    const unsubClients = onSnapshot(
+      collection(db, "billingClients"),
+      snap => { setClients(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+      err  => { showToast(err.message || "Failed to load clients", "error"); setLoading(false); }
+    );
+    const unsubPayments = onSnapshot(
+      collection(db, "billingPayments"),
+      snap => setPayments(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err  => showToast(err.message || "Failed to load payments", "error")
+    );
+    return () => { unsubClients(); unsubPayments(); };
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  // Keep the open detail-panel client in sync with realtime updates
+  useEffect(() => {
+    if (activeC) {
+      const fresh = clients.find(c => c.id === activeC.id);
+      if (fresh && fresh !== activeC) setActiveC(fresh);
+    }
+  }, [clients]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── helpers ──────────────────────────────────────────────────── */
   const getPays    = (cid) => payments.filter(p => p.clientId === cid);
@@ -1030,7 +1041,7 @@ export default function App() {
     setDrawer(null); setFormErr({}); setEditMode(false); setForm(BLANK_CLIENT);
   };
 
-  /* ── CREATE / UPDATE client — hits backend, no more local-only state ── */
+  /* ── CREATE / UPDATE client — direct Firestore write, no backend ── */
   const submitClient = async () => {
     const e = validateClient();
     if (Object.keys(e).length) { setFormErr(e); return; }
@@ -1038,69 +1049,74 @@ export default function App() {
     setSaving(true);
     try {
       if (editMode && activeC) {
-        const updated = await Api.updateClient(activeC.id, payload);
-        setClients(cs => cs.map(c => c.id===activeC.id ? updated : c));
-        setActiveC(updated);
+        await updateDoc(doc(db, "billingClients", activeC.id), payload);
         showToast("Client updated successfully");
       } else {
-        const created = await Api.createClient(payload);
-        setClients(cs => [...cs, created]);
+        await addDoc(collection(db, "billingClients"), {
+          ...payload, active: true, createdAt: new Date().toISOString(),
+        });
         showToast("Client added successfully");
       }
       closeClientDrawer();
+      // No manual setClients() needed — the onSnapshot listener above
+      // picks up the write automatically and updates the UI in realtime.
     } catch (err) {
+      console.error("submitClient error:", err.message);
       showToast(err.message || "Save failed", "error");
     }
     setSaving(false);
   };
 
-  /* ── CREATE payment — hits backend ───────────────────────────── */
+  /* ── CREATE payment — direct Firestore write ─────────────────── */
   const submitPayment = async () => {
     if (!payForm.clientId||!payForm.amount||Number(payForm.amount)<=0||!payForm.date) {
       showToast("Fill all required fields","error"); return;
     }
     setSaving(true);
     try {
-      const created = await Api.createPayment({
+      await addDoc(collection(db, "billingPayments"), {
         clientId: payForm.clientId,
         amount: Number(payForm.amount),
         date: payForm.date,
         note: payForm.note,
         mode: payForm.mode,
+        createdAt: new Date().toISOString(),
       });
-      setPayments(ps=>[...ps, created]);
       setPayForm({clientId:"",amount:"",date:todayStr(),note:"",mode:"cash"});
       setDrawer(null);
       showToast("Payment recorded");
     } catch (err) {
+      console.error("submitPayment error:", err.message);
       showToast(err.message || "Failed to record payment", "error");
     }
     setSaving(false);
   };
 
-  /* ── DELETE client — hits backend (server cascades payments) ──── */
+  /* ── DELETE client — cascades payments via a Firestore batch ─── */
   const deleteClient = async (id) => {
     setDeleting(true);
     try {
-      await Api.deleteClient(id);
-      setClients(cs=>cs.filter(c=>c.id!==id));
-      setPayments(ps=>ps.filter(p=>p.clientId!==id));
+      const paySnap = await getDocs(query(collection(db, "billingPayments"), where("clientId","==",id)));
+      const batch = writeBatch(db);
+      paySnap.forEach(d => batch.delete(d.ref));
+      batch.delete(doc(db, "billingClients", id));
+      await batch.commit();
       setDrawer(null); setActiveC(null); setConfirmDel(null);
       showToast("Client deleted","error");
     } catch (err) {
+      console.error("deleteClient error:", err.message);
       showToast(err.message || "Delete failed", "error");
     }
     setDeleting(false);
   };
 
-  /* ── TOGGLE active — hits backend ────────────────────────────── */
+  /* ── TOGGLE active — direct Firestore update ─────────────────── */
   const toggleActive = async (c) => {
     try {
-      const { active } = await Api.toggleClient(c.id);
-      setClients(cs=>cs.map(x=>x.id===c.id?{...x,active}:x));
-      setActiveC(a => a && a.id===c.id ? {...a,active} : a);
-      showToast(active?"Client activated":"Client deactivated","info");
+      await updateDoc(doc(db, "billingClients", c.id), { active: !c.active });
+      showToast(!c.active ? "Client activated" : "Client deactivated", "info");
     } catch (err) {
+      console.error("toggleActive error:", err.message);
       showToast(err.message || "Update failed", "error");
     }
   };
@@ -1163,13 +1179,20 @@ export default function App() {
     },{})
   ).sort((a,b)=>b[1].count-a[1].count);
 
+  // Content max-width scales with breakpoint so desktop/tablet don't
+  // stretch a single-column layout too wide, while mobile stays full-bleed.
+  const contentMaxWidth = isDesktop ? 980 : isTablet ? 760 : "100%";
+  const contentPadX     = isMobile ? 12 : isTablet ? 18 : 20;
+  const headerPadX      = isMobile ? 12 : isTablet ? 18 : 20;
+
   return (
     <>
       <IconsLoader />
       <style>{`
-        @keyframes sk      { from{transform:translateX(-100%)} to{transform:translateX(220%)} }
-        @keyframes slideIn { from{transform:translateX(100%)}  to{transform:translateX(0)}    }
-        @keyframes fadeUp  { from{opacity:0;transform:translate(-50%,12px)} to{opacity:1;transform:translate(-50%,0)} }
+        @keyframes sk       { from{transform:translateX(-100%)} to{transform:translateX(220%)} }
+        @keyframes slideIn  { from{transform:translateX(100%)}  to{transform:translateX(0)}    }
+        @keyframes fadeUp   { from{opacity:0;transform:translate(-50%,12px)} to{opacity:1;transform:translate(-50%,0)} }
+        @keyframes pulseDot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.75)} }
         *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
         body { background:${T.bg}; }
         ::-webkit-scrollbar       { width:4px; height:4px; }
@@ -1186,7 +1209,7 @@ export default function App() {
         display:"flex",flexDirection:"column"}}>
 
         <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,
-          padding:`0 ${isMobile?12:20}px`,display:"flex",alignItems:"center",
+          padding:`0 ${headerPadX}px`,display:"flex",alignItems:"center",
           justifyContent:"space-between",height:56,position:"sticky",top:0,zIndex:50,flexShrink:0}}>
 
           <div style={{display:"flex",alignItems:"center",gap:9}}>
@@ -1194,13 +1217,11 @@ export default function App() {
               border:`1px solid ${T.accent}40`,display:"flex",alignItems:"center",justifyContent:"center"}}>
               <i className="ti ti-building-store" style={{color:T.accent,fontSize:16}} />
             </div>
-            <span style={{fontSize:16,fontWeight:800,color:T.t1,letterSpacing:"-0.4px"}}>ClientPro</span>
+            {!isMobile && <span style={{fontSize:16,fontWeight:800,color:T.t1,letterSpacing:"-0.4px"}}>ClientPro</span>}
           </div>
 
-          <div style={{display:"flex",gap:8}}>
-            <Btn small onClick={loadAll}>
-              <i className="ti ti-refresh" />{!isMobile && "Refresh"}
-            </Btn>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <LiveBadge compact={isMobile} />
             {!isMobile&&(
               <Btn small onClick={openAddPayment}>
                 <i className="ti ti-plus" />Payment
@@ -1231,8 +1252,8 @@ export default function App() {
           ))}
         </div>
 
-        <div style={{flex:1,padding:`20px ${isMobile?12:20}px ${isMobile?110:50}px`,
-          maxWidth:920,width:"100%",margin:"0 auto"}}>
+        <div style={{flex:1,padding:`20px ${contentPadX}px ${isMobile?110:50}px`,
+          maxWidth:contentMaxWidth,width:"100%",margin:"0 auto"}}>
           {tab==="dashboard" && (
             <Dashboard
               loading={loading} activeList={activeList} clients={clients} payments={payments}
@@ -1284,7 +1305,7 @@ export default function App() {
         onClose={closeClientDrawer}
         title={editMode?"Edit client":"Add new client"}
         subtitle={editMode?`Editing: ${activeC?.restaurantName}`:"Fill in the client details below"}
-        width={530}>
+        width={isMobile?9999:isTablet?460:530}>
         <ClientForm
           form={form} formErr={formErr} setF={setF}
           stateOpts={stateOpts} cityOpts={cityOpts}
@@ -1297,7 +1318,7 @@ export default function App() {
         onClose={()=>setDrawer(null)}
         title="Record payment"
         subtitle="Log a payment transaction"
-        width={460}>
+        width={isMobile?9999:isTablet?420:460}>
         <PaymentForm
           payForm={payForm} setPayForm={setPayForm} clients={clients}
           getBalance={getBalance} saving={saving}
@@ -1308,7 +1329,7 @@ export default function App() {
       <Drawer open={drawer==="detail"}
         onClose={()=>setDrawer(null)}
         title="" subtitle=""
-        width={500}>
+        width={isMobile?9999:isTablet?440:500}>
         <DetailPanel
           c={activeC} getPays={getPays} getBalance={getBalance} getStatus={getStatus}
           onAddPayment={openAddPaymentFor} onEdit={openEdit}
