@@ -358,9 +358,9 @@ function FlowDiagram({ compact }) {
         <Text style={styles.flowTopText}>Inbox connected</Text>
       </View>
       <View style={[styles.flowCanvas, compact && styles.flowCanvasCompact]}>
-        <FlowNode label="ZOP INDIA" type="mail" style={[styles.inputA, compact && styles.compactInputA]} />
-        <FlowNode label="RAILFOOD" type="mail" style={[styles.inputB, compact && styles.compactInputB]} />
-        <FlowNode label="IRCTC" type="mail" style={[styles.inputC, compact && styles.compactInputC]} />
+        <FlowNode label="Vendor 1" type="mail" style={[styles.inputA, compact && styles.compactInputA]} />
+        <FlowNode label="Vendor 2" type="mail" style={[styles.inputB, compact && styles.compactInputB]} />
+        <FlowNode label="Vendor 3" type="mail" style={[styles.inputC, compact && styles.compactInputC]} />
         <View style={[styles.hLine, styles.lineInA, compact && styles.compactLineInA]} />
         <View style={[styles.hLine, styles.lineInB, compact && styles.compactLineInB]} />
         <View style={[styles.hLine, styles.lineOutA, compact && styles.compactLineOutA]} />
