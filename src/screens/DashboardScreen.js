@@ -83,7 +83,7 @@ const extractTrainNo = (trainInfo) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Pagination Bar
 // ─────────────────────────────────────────────────────────────────────────────
-const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange }) => {
+const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange, isMobile }) => {
   const [pageSizeDropdownVisible, setPageSizeDropdownVisible] = useState(false);
   const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
   const startItem  = totalItems === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
@@ -100,9 +100,9 @@ const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, on
   );
 
   return (
-    <View style={styles.paginationBar}>
+    <View style={[styles.paginationBar, isMobile && styles.paginationBarMobile]}>
       <View style={styles.pageSizeWrapper}>
-        <Text style={styles.pageSizeLabel}>Items per page:</Text>
+        <Text style={styles.pageSizeLabel}>{isMobile ? 'Per page:' : 'Items per page:'}</Text>
         <TouchableOpacity
           style={styles.pageSizeSelector}
           onPress={() => setPageSizeDropdownVisible(v => !v)}
@@ -132,7 +132,7 @@ const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, on
         )}
       </View>
 
-      <Text style={styles.pageRangeText}>{startItem}–{endItem} of {totalItems}</Text>
+      <Text style={[styles.pageRangeText, isMobile && { fontSize: 11 }]}>{startItem}–{endItem} of {totalItems}</Text>
 
       <View style={styles.pageNavRow}>
         <NavBtn iconName="play-skip-back"    onPress={() => onPageChange(1)}               disabled={currentPage === 1} />
@@ -201,8 +201,8 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted, isMobile }) =>
 
   const MOBILE_TABS = [
     { key: 'items', label: 'ITEMS', icon: 'list-outline' },
-    { key: 'customer', label: 'CUSTOMER', icon: 'person-outline' },
-    { key: 'billing', label: 'BILLING', icon: 'receipt-outline' },
+    { key: 'customer', label: 'CONTACT', icon: 'person-outline' },
+    { key: 'billing', label: 'BILLS', icon: 'receipt-outline' },
   ];
 
   return (
@@ -970,6 +970,7 @@ export default function DashboardScreen({ clientId }) {
             itemsPerPage={itemsPerPage}
             onPageChange={handlePageChange}
             onItemsPerPageChange={handleItemsPerPageChange}
+            isMobile={isMobile}
           />
         )}
       </View>
@@ -1174,6 +1175,10 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end', gap: 20,
     paddingHorizontal: 16, paddingVertical: 12,
     borderTopWidth: 1, borderColor: '#e2e8f0', backgroundColor: 'white',
+  },
+  paginationBarMobile: {
+    flexWrap: 'wrap', justifyContent: 'space-between',
+    gap: 10, paddingHorizontal: 12, paddingVertical: 10,
   },
   pageSizeWrapper:  { flexDirection: 'row', alignItems: 'center', gap: 8, position: 'relative' },
   pageSizeLabel:    { fontSize: 12, color: '#64748b', fontWeight: '500' },
