@@ -24,15 +24,14 @@ const colors = {
 };
 
 const vendors = [
-  'Zop India',
-  'Railfood',
-  'Yatri Restro',
-  'IRCTC',
-  'Yatri Bhojan',
-  'Rail Receipt',
-  'Rail Yatri',
-  'Dibrail',
-  'Spicy Wagon',
+  'Vedor 1',
+  'Vendor 2',
+  'Vendor 3',
+  'Vendor 4',
+  'Vendor 5',
+  'Vendor 6',
+  'Vendor 7',
+  'Vendor 8',
   'Any email vendor',
 ];
 
