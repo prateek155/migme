@@ -45,6 +45,26 @@ const isWeb = Platform.OS === 'web' && typeof window !== 'undefined';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  // ── Fix: extend content behind status bar (Median WebView) ──
+  // Median's "Overlay" status-bar option renders content behind the status
+  // bar, but that only works if the viewport meta tag has viewport-fit=cover.
+  // Expo's default web template doesn't include it, so we patch it in here
+  // at runtime instead of needing a custom web/index.html file.
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      let viewport = document.querySelector('meta[name="viewport"]');
+      const content = 'width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover';
+      if (viewport) {
+        viewport.setAttribute('content', content);
+      } else {
+        viewport = document.createElement('meta');
+        viewport.name = 'viewport';
+        viewport.content = content;
+        document.head.appendChild(viewport);
+      }
+    }
+  }, []);
+
   const [user, setUser]                       = useState(null);
   const [loading, setLoading]                 = useState(true);
   const [showHome, setShowHome]               = useState(() => {
