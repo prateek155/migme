@@ -24,7 +24,7 @@ const colors = {
 };
 
 const vendors = [
-  'Vedor 1',
+  'Vendor 1',
   'Vendor 2',
   'Vendor 3',
   'Vendor 4',
@@ -32,6 +32,7 @@ const vendors = [
   'Vendor 6',
   'Vendor 7',
   'Vendor 8',
+  'Vendor 9',
   'Any email vendor',
 ];
 
@@ -52,7 +53,7 @@ const steps = [
 ];
 
 const faqs = [
-  ['Which vendors does Migme work with?', 'Any vendor that sends orders by email. Migme is built for train food delivery order mail from platforms like Zop India, Railfood, IRCTC, Yatri Restro and similar vendors.'],
+  ['Which vendors does Migme work with?', 'Any vendor that sends orders by email. Migme is built for train food delivery order mail from platforms like Vendor 1, Vendor 2, Vendor 3, Yatri Restro and similar vendors.'],
   ['Does it change how vendors send orders?', 'No. Vendors keep sending emails the way they already do. Migme works on your side by reading the connected order mailbox.'],
   ['What happens when an email format is unclear?', 'Migme flags the order for review so your team can check it. Unknown formats are not silently ignored.'],
   ['Can the team export records?', 'Yes. You can export order records by vendor, status or date range for reporting and accounting work.'],
@@ -62,6 +63,8 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
   const { width } = useWindowDimensions();
   const screen = useMemo(() => getScreen(width), [width]);
   const isWide = width >= 940;
+  const isTwoCol = width >= 760;
+  const flowSize = width < 480 ? 'sm' : width < 900 ? 'md' : 'lg';
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -101,11 +104,11 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
             </View>
           </View>
 
-          <FlowDiagram compact={!isWide && width < 620} />
+          <FlowDiagram size={flowSize} />
         </View>
 
         <Section background="mist">
-          <View style={[screen.wrap, isWide ? styles.twoCol : styles.stackGap]}>
+          <View style={[screen.wrap, isTwoCol ? styles.twoCol : styles.stackGap]}>
             <View>
               <Eyebrow>What Migme does</Eyebrow>
               <Text style={[styles.h2, screen.h2]}>It turns scattered vendor emails into a dependable order desk.</Text>
@@ -158,7 +161,7 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
         </Section>
 
         <Section>
-          <View style={[screen.wrap, isWide ? styles.twoCol : styles.stackGap]}>
+          <View style={[screen.wrap, isTwoCol ? styles.twoCol : styles.stackGap]}>
             <View>
               <Eyebrow>Vendor coverage</Eyebrow>
               <Text style={[styles.h2, screen.h2]}>Works with the platforms already sending your order mail.</Text>
@@ -177,7 +180,7 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
         </Section>
 
         <Section>
-          <View style={[screen.wrap, isWide ? styles.twoCol : styles.stackGap]}>
+          <View style={[screen.wrap, isTwoCol ? styles.twoCol : styles.stackGap]}>
             <View>
               <Eyebrow>Questions</Eyebrow>
               <Text style={[styles.h2, screen.h2]}>Before you connect the order inbox.</Text>
@@ -310,46 +313,67 @@ function Section({ children, background }) {
   );
 }
 
-function FlowDiagram({ compact }) {
-  const progress = useRef(new Animated.Value(0)).current;
+// X-axis travel range and Y-axis keyframes for each of the 4 flow paths, per screen tier.
+// Only the X range scales with tier — the Y keyframes (the curve into/out of the hub) stay constant.
+const FLOW_PATHS = {
+  sm: { AB: [24, 190], CD: [215, 360] },
+  md: { AB: [24, 222], CD: [248, 420] },
+  lg: { AB: [24, 245], CD: [275, 460] },
+};
 
+function useFlowParticle(duration, delay) {
+  const value = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
-      Animated.timing(progress, {
-        toValue: 1,
-        duration: 4200,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
+      Animated.sequence([
+        Animated.delay(delay),
+        Animated.timing(value, {
+          toValue: 1,
+          duration,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      ])
     );
     loop.start();
     return () => loop.stop();
-  }, [progress]);
+  }, [value, duration, delay]);
+  return value;
+}
 
-  const dotA = {
+// Fades a particle in as it leaves its origin and out as it reaches its destination,
+// so the loop reset is invisible and the flow reads as continuous rather than one-shot.
+function particleStyle(value, xRange, yStops, yRange) {
+  return {
+    opacity: value.interpolate({ inputRange: [0, 0.1, 0.9, 1], outputRange: [0, 1, 1, 0] }),
     transform: [
-      { translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [24, compact ? 190 : 245] }) },
-      { translateY: progress.interpolate({ inputRange: [0, .5, 1], outputRange: [86, 210, 210] }) },
+      { translateX: value.interpolate({ inputRange: [0, 1], outputRange: xRange }) },
+      { translateY: value.interpolate({ inputRange: yStops, outputRange: yRange }) },
     ],
   };
-  const dotB = {
-    transform: [
-      { translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [24, compact ? 190 : 245] }) },
-      { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [210, 210] }) },
-    ],
-  };
-  const dotC = {
-    transform: [
-      { translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [compact ? 215 : 275, compact ? 360 : 460] }) },
-      { translateY: progress.interpolate({ inputRange: [0, .5, 1], outputRange: [210, 102, 102] }) },
-    ],
-  };
-  const dotD = {
-    transform: [
-      { translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [compact ? 215 : 275, compact ? 360 : 460] }) },
-      { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [210, 210] }) },
-    ],
-  };
+}
+
+function FlowDiagram({ size = 'lg' }) {
+  const DURATION = 3200;
+  // Two particles per path, started half a cycle apart, so a dot is always in flight.
+  const p1 = useFlowParticle(DURATION, 0);
+  const p2 = useFlowParticle(DURATION, DURATION / 2);
+
+  const paths = FLOW_PATHS[size];
+  const compact = size !== 'lg';
+  const medium = size === 'md';
+
+  const nodeStyle = (base, compactStyle, mediumStyle) => [
+    base,
+    medium ? mediumStyle : compact ? compactStyle : null,
+  ];
+
+  const dots = [p1, p2].flatMap((val) => ([
+    particleStyle(val, paths.AB, [0, .5, 1], [86, 210, 210]),
+    particleStyle(val, paths.AB, [0, 1], [210, 210]),
+    particleStyle(val, paths.CD, [0, .5, 1], [210, 102, 102]),
+    particleStyle(val, paths.CD, [0, 1], [210, 210]),
+  ]));
 
   return (
     <View style={[styles.flowCard, compact && styles.flowCardCompact]}>
@@ -357,27 +381,26 @@ function FlowDiagram({ compact }) {
         <Text style={styles.flowTopText}>Live order flow</Text>
         <Text style={styles.flowTopText}>Inbox connected</Text>
       </View>
-      <View style={[styles.flowCanvas, compact && styles.flowCanvasCompact]}>
-        <FlowNode label="Vendor 1" type="mail" style={[styles.inputA, compact && styles.compactInputA]} />
-        <FlowNode label="Vendor 2" type="mail" style={[styles.inputB, compact && styles.compactInputB]} />
-        <FlowNode label="Vendor 3" type="mail" style={[styles.inputC, compact && styles.compactInputC]} />
-        <View style={[styles.hLine, styles.lineInA, compact && styles.compactLineInA]} />
-        <View style={[styles.hLine, styles.lineInB, compact && styles.compactLineInB]} />
-        <View style={[styles.hLine, styles.lineOutA, compact && styles.compactLineOutA]} />
-        <View style={[styles.hLine, styles.lineOutB, compact && styles.compactLineOutB]} />
-        <View style={[styles.hub, compact && styles.hubCompact]}>
+      <View style={[styles.flowCanvas, medium && styles.flowCanvasMedium, size === 'sm' && styles.flowCanvasCompact]}>
+        <FlowNode label="VENDOR 1" type="mail" style={nodeStyle(styles.inputA, styles.compactInputA, styles.mediumInputA)} />
+        <FlowNode label="VENDOR 2" type="mail" style={nodeStyle(styles.inputB, styles.compactInputB, styles.mediumInputB)} />
+        <FlowNode label="VENDOR 3" type="mail" style={nodeStyle(styles.inputC, styles.compactInputC, styles.mediumInputC)} />
+        <View style={[styles.hLine, nodeStyle(styles.lineInA, styles.compactLineInA, styles.mediumLineInA)]} />
+        <View style={[styles.hLine, nodeStyle(styles.lineInB, styles.compactLineInB, styles.mediumLineInB)]} />
+        <View style={[styles.hLine, nodeStyle(styles.lineOutA, styles.compactLineOutA, styles.mediumLineOutA)]} />
+        <View style={[styles.hLine, nodeStyle(styles.lineOutB, styles.compactLineOutB, styles.mediumLineOutB)]} />
+        <View style={[styles.hub, medium && styles.hubMedium, size === 'sm' && styles.hubCompact]}>
           <View style={styles.hubInner}>
             <Text style={styles.hubIcon}>M</Text>
           </View>
           <Text style={styles.hubText}>MIGME PARSES</Text>
         </View>
-        <FlowNode label="DASHBOARD" type="panel" style={[styles.outputA, compact && styles.compactOutputA]} />
-        <FlowNode label="ALERTS" type="alert" style={[styles.outputB, compact && styles.compactOutputB]} />
-        <FlowNode label="LEDGER" type="ledger" style={[styles.outputC, compact && styles.compactOutputC]} />
-        <Animated.View style={[styles.packet, dotA]} />
-        <Animated.View style={[styles.packet, dotB]} />
-        <Animated.View style={[styles.packet, dotC]} />
-        <Animated.View style={[styles.packet, dotD]} />
+        <FlowNode label="DASHBOARD" type="panel" style={nodeStyle(styles.outputA, styles.compactOutputA, styles.mediumOutputA)} />
+        <FlowNode label="ALERTS" type="alert" style={nodeStyle(styles.outputB, styles.compactOutputB, styles.mediumOutputB)} />
+        <FlowNode label="LEDGER" type="ledger" style={nodeStyle(styles.outputC, styles.compactOutputC, styles.mediumOutputC)} />
+        {dots.map((d, i) => (
+          <Animated.View key={i} style={[styles.packet, d]} />
+        ))}
       </View>
       <View style={styles.flowNote}>
         <View style={styles.dot} />
@@ -655,6 +678,9 @@ const styles = StyleSheet.create({
   flowCanvasCompact: {
     height: 360,
   },
+  flowCanvasMedium: {
+    height: 400,
+  },
   flowNode: {
     position: 'absolute',
     width: 104,
@@ -689,6 +715,12 @@ const styles = StyleSheet.create({
   compactOutputA: { right: 0, top: 34 },
   compactOutputB: { right: 0, top: 142 },
   compactOutputC: { right: 0, top: 250 },
+  mediumInputA: { left: 0, top: 32 },
+  mediumInputB: { left: 0, top: 156 },
+  mediumInputC: { left: 0, top: 280 },
+  mediumOutputA: { right: 0, top: 44 },
+  mediumOutputB: { right: 0, top: 156 },
+  mediumOutputC: { right: 0, top: 268 },
   hLine: {
     position: 'absolute',
     height: 1,
@@ -704,6 +736,10 @@ const styles = StyleSheet.create({
   compactLineInB: { left: 98, top: 208, width: 112 },
   compactLineOutA: { right: 98, top: 94, width: 112 },
   compactLineOutB: { right: 98, top: 208, width: 112 },
+  mediumLineInA: { left: 100, top: 100, width: 150 },
+  mediumLineInB: { left: 100, top: 210, width: 150 },
+  mediumLineOutA: { right: 100, top: 100, width: 150 },
+  mediumLineOutB: { right: 100, top: 210, width: 150 },
   hub: {
     position: 'absolute',
     left: '50%',
@@ -722,6 +758,13 @@ const styles = StyleSheet.create({
     height: 116,
     marginLeft: -58,
     borderRadius: 58,
+  },
+  hubMedium: {
+    top: 155,
+    width: 124,
+    height: 124,
+    marginLeft: -62,
+    borderRadius: 62,
   },
   hubInner: {
     width: 92,
