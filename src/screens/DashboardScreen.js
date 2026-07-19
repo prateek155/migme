@@ -20,10 +20,31 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 const TODAY_FILTER_KEY = 'dashboard_today_only';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Responsive breakpoint — below this width, we switch from the table layout
-// to a stacked mobile-card layout so columns never get squeezed/overlapped.
+// Responsive breakpoint — below this width we switch the table's column
+// sizing from flex-ratios to FIXED pixel widths and wrap the whole table
+// (header + rows) in a horizontal ScrollView. This keeps the exact same
+// row/column design as desktop — nothing is redesigned — it just becomes
+// side-scrollable instead of squeezing/overlapping on narrow screens.
 // ─────────────────────────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 700;
+
+// Fixed pixel widths used ONLY when isMobile is true. Chosen to mirror the
+// original flex ratios (0.8 / 1.1 / 1.0 / 0.8 / 1.2 / 1.2 / 0.9 / 1.2) at a
+// comfortable reading size — same proportions, just non-compressible.
+const COL_W = {
+  expand:  36,
+  status:  90,
+  orderNo: 120,
+  date:    100,
+  time:    80,
+  vendor:  130,
+  train:   140,
+  payment: 100,
+  actions: 130,
+};
+const TABLE_WIDTH =
+  COL_W.expand + COL_W.status + COL_W.orderNo + COL_W.date + COL_W.time +
+  COL_W.vendor + COL_W.train + COL_W.payment + COL_W.actions + 24; // +row padding
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ✅ FIX: Statuses that should be visible on the dashboard.
@@ -124,11 +145,15 @@ const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, on
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Expandable Order Row — renders either the desktop table row or, on
-// narrow (mobile) screens, a stacked card so columns never overlap.
+// Expandable Order Row — SAME layout/design as before on desktop.
+// On mobile, the expanded detail area now uses a tabbed accordion
+// (Items / Customer / Billing) instead of stacking all three sections
+// vertically — only the active tab's content renders, so the card no
+// longer grows very tall when expanded. Desktop is untouched.
 // ─────────────────────────────────────────────────────────────────────────────
 const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted, isMobile }) => {
   const [expanded, setExpanded] = useState(false);
+  const [mobileTab, setMobileTab] = useState('items'); // 'items' | 'customer' | 'billing'
   const STORAGE_KEY = 'viewedOrders';
   const getViewedSet = () => {
     try { return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); }
@@ -168,184 +193,35 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted, isMobile }) =>
   const paymentLabel = isCOD ? 'COD' : 'ONLINE';
   const amountToCollect = isCOD ? (item.totalAmount || 0) : 0;
 
-  const dateStr = item.deliveryDate ? new Date(item.deliveryDate).toLocaleDateString('en-GB') : '—';
-
   const handleAssignPress = () => {
     assignBtnRef.current?.measure((fx, fy, width, height, px, py) => {
       onAssign(item, { x: px, y: py, width, height });
     });
   };
 
-  const markViewedAndToggle = () => {
-    if (!expanded && !viewed) {
-      const set = getViewedSet();
-      set.add(item.id);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]));
-      setViewed(true);
-    }
-    setExpanded(!expanded);
-  };
+  const MOBILE_TABS = [
+    { key: 'items', label: 'ITEMS', icon: 'list-outline' },
+    { key: 'customer', label: 'CUSTOMER', icon: 'person-outline' },
+    { key: 'billing', label: 'BILLING', icon: 'receipt-outline' },
+  ];
 
-  // ── Shared expanded detail section (used by both layouts) ──
-  const ExpandedDetails = () => (
-    <View style={styles.expandedContent}>
-      <View style={[styles.expandedLayout, isMobile && { flexDirection: 'column' }]}>
-
-        {/* Items */}
-        <View style={[styles.expandSectionLeft, isMobile && { flex: undefined }]}>
-          <View style={styles.miniTableHeader}>
-            <Text style={[styles.miniHeadText, { flex: 1 }]}>ITEM NAME</Text>
-            <Text style={[styles.miniHeadText, { width: 56, textAlign: 'center' }]}>QTY</Text>
-          </View>
-          {item.items && item.items.map((prod, idx) => (
-            <View key={idx} style={styles.miniTableRow}>
-              <Text style={[styles.miniCellText, { flex: 1 }]}>{prod.name}</Text>
-              <Text style={[styles.miniCellText, { width: 56, textAlign: 'center', fontWeight: '700', color: '#0f172a' }]}>
-                {prod.quantity}
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Customer */}
-        <View style={[styles.expandSectionMid, isMobile && { flex: undefined }]}>
-          <Text style={styles.sectionLabel}>CUSTOMER DETAILS</Text>
-          <Text style={styles.remarkText}>{item.customerName}</Text>
-          <Text style={[styles.remarkText, { color: '#475569', fontWeight: '700' }]}>Mo: {item.contactNo}</Text>
-
-          {item.remark && item.remark.trim() !== '' && (
-            <View style={styles.remarkBox}>
-              <Text style={styles.remarkAlertText}>⚠ SPECIAL INSTRUCTIONS</Text>
-              <Text style={styles.remarkContentText}>{item.remark}</Text>
-            </View>
-          )}
-
-          {item.assignedExecutiveName && (
-            <View style={styles.assignedBadgeBox}>
-              <Text style={styles.assignedBadgeLabel}>ASSIGNED TO:</Text>
-              <Text style={styles.assignedBadgeName}>{item.assignedExecutiveName}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Billing */}
-        <View style={[styles.expandSectionRight, isMobile && { flex: undefined }]}>
-          <Text style={styles.sectionLabel}>BILLING SUMMARY</Text>
-          <View style={styles.financeRow}>
-            <Text style={styles.financeLabel}>Sub Total</Text>
-            <Text style={styles.financeValue}>₹ {item.subTotal || 0}</Text>
-          </View>
-          <View style={styles.financeRow}>
-            <Text style={styles.financeLabel}>Tax / GST</Text>
-            <Text style={styles.financeValue}>₹ {item.tax || 0}</Text>
-          </View>
-          <View style={styles.financeRow}>
-            <Text style={styles.financeLabel}>Delivery</Text>
-            <Text style={styles.financeValue}>₹ {item.deliveryCharge || 0}</Text>
-          </View>
-          <View style={styles.financeDivider} />
-          <View style={styles.financeRow}>
-            <Text style={[styles.financeLabel, { fontWeight: '700', color: '#0f172a' }]}>TOTAL BILL</Text>
-            <Text style={[styles.financeValue, { fontSize: 15, fontWeight: '800', color: '#0f172a' }]}>
-              ₹ {item.totalAmount || 0}
-            </Text>
-          </View>
-          {isCOD && (
-            <View style={styles.amountToCollectBar}>
-              <Text style={styles.atcLabel}>COLLECT CASH</Text>
-              <Text style={styles.atcValue}>₹ {amountToCollect}</Text>
-            </View>
-          )}
-        </View>
-      </View>
-    </View>
-  );
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // MOBILE — stacked card layout (no columns to squeeze/overlap)
-  // ═══════════════════════════════════════════════════════════════════════
-  if (isMobile) {
-    return (
-      <View style={styles.cardContainer}>
-        <TouchableOpacity
-          style={styles.mobileCard}
-          onPress={markViewedAndToggle}
-          activeOpacity={0.85}
-        >
-          {/* Top row: status badge · order no · payment tag */}
-          <View style={styles.mobileTopRow}>
-            <View style={[styles.badge, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
-              <Text style={{ fontSize: 11, fontWeight: '800', color: badgeTxt, letterSpacing: 0.4 }}>
-                {item.status || 'ACTIVE'}
-              </Text>
-            </View>
-            <Text style={styles.mobileOrderNo} numberOfLines={1}>
-              #{formatOrderNoForDisplay(item.orderNo)}
-            </Text>
-            <Text style={[styles.paymentTag, { color: paymentColor, borderColor: paymentColor }]}>
-              {paymentLabel}
-            </Text>
-          </View>
-
-          {/* Vendor + date/time */}
-          <View style={styles.mobileMidRow}>
-            <Text style={styles.mobileVendor} numberOfLines={1}>{item.vendorName}</Text>
-            <Text style={styles.mobileMeta}>{dateStr} · {item.deliveryTime || '—'}</Text>
-          </View>
-
-          {/* Train info */}
-          <Text style={styles.mobileTrain} numberOfLines={1}>
-            🚆 {extractTrainNo(item.trainInfo)}{' '}
-            <Text style={{ color: '#dc2626', fontWeight: '700' }}>
-              ({item.coach || 'No Coach'}{item.seat ? ` / ${item.seat}` : ''})
-            </Text>
-          </Text>
-
-          {/* Bottom row: actions + expand chevron */}
-          <View style={styles.mobileBottomRow}>
-            <View style={{ position: 'relative' }}>
-              <TouchableOpacity ref={assignBtnRef} style={styles.assignBtn} onPress={handleAssignPress}>
-                <Ionicons name="bicycle-outline" size={16} color="#ffffff" />
-              </TouchableOpacity>
-              {isAssigned && (
-                <View style={styles.tickBadge}>
-                  <Ionicons name="checkmark" size={8} color="#fff" />
-                </View>
-              )}
-            </View>
-
-            <View style={{ position: 'relative' }}>
-              <TouchableOpacity style={styles.printBtn} onPress={() => onPrint(item)}>
-                <Ionicons name="print-outline" size={16} color="#ffffff" />
-              </TouchableOpacity>
-              {isPrinted && (
-                <View style={styles.tickBadge}>
-                  <Ionicons name="checkmark" size={8} color="#fff" />
-                </View>
-              )}
-            </View>
-
-            <View style={{ flex: 1 }} />
-
-            <View style={styles.mobileExpandDot}>
-              <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="#ffffff" />
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        {expanded && <ExpandedDetails />}
-      </View>
-    );
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // DESKTOP — original table row layout (unchanged)
-  // ═══════════════════════════════════════════════════════════════════════
   return (
     <View style={styles.cardContainer}>
       <TouchableOpacity
-        style={[styles.tableRow, expanded && styles.tableRowExpanded]}
-        onPress={markViewedAndToggle}
+        style={[
+          styles.tableRow,
+          expanded && styles.tableRowExpanded,
+          isMobile && { width: TABLE_WIDTH },
+        ]}
+        onPress={() => {
+          if (!expanded && !viewed) {
+            const set = getViewedSet();
+            set.add(item.id);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]));
+            setViewed(true);
+          }
+          setExpanded(!expanded);
+        }}
         activeOpacity={0.85}
       >
         <View style={{
@@ -357,7 +233,7 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted, isMobile }) =>
           <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="#ffffff" />
         </View>
 
-        <View style={{ flex: 0.8 }}>
+        <View style={isMobile ? { width: COL_W.status } : { flex: 0.8 }}>
           <View style={[styles.badge, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
             <Text style={{ fontSize: 12, fontWeight: '800', color: badgeTxt, letterSpacing: 0.5 }}>
               {item.status || 'ACTIVE'}
@@ -365,28 +241,58 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted, isMobile }) =>
           </View>
         </View>
 
-        <Text style={[styles.cell, { flex: 1.1, fontWeight: '700', color: '#0f172a' }]}>{formatOrderNoForDisplay(item.orderNo)}</Text>
-        <Text style={[styles.cell, { flex: 1.0, fontSize: 12 }]}>
-          {dateStr}
+        <Text style={[
+          styles.cell,
+          isMobile ? { width: COL_W.orderNo } : { flex: 1.1 },
+          { fontWeight: '700', color: '#0f172a' },
+        ]}>
+          {formatOrderNoForDisplay(item.orderNo)}
         </Text>
-        <Text style={[styles.cell, { flex: 0.8, fontSize: 12, fontWeight: '500' }]}>{item.deliveryTime || '—'}</Text>
-        <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={1}>{item.vendorName}</Text>
 
-        <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={2}>
+        <Text style={[
+          styles.cell,
+          isMobile ? { width: COL_W.date } : { flex: 1.0 },
+          { fontSize: 12 },
+        ]}>
+          {item.deliveryDate ? new Date(item.deliveryDate).toLocaleDateString('en-GB') : '—'}
+        </Text>
+
+        <Text style={[
+          styles.cell,
+          isMobile ? { width: COL_W.time } : { flex: 0.8 },
+          { fontSize: 12, fontWeight: '500' },
+        ]}>
+          {item.deliveryTime || '—'}
+        </Text>
+
+        <Text
+          style={[styles.cell, isMobile ? { width: COL_W.vendor } : { flex: 1.2 }]}
+          numberOfLines={1}
+        >
+          {item.vendorName}
+        </Text>
+
+        <Text
+          style={[styles.cell, isMobile ? { width: COL_W.train } : { flex: 1.2 }]}
+          numberOfLines={2}
+        >
           {extractTrainNo(item.trainInfo)}{' '}
           <Text style={{ color: '#dc2626', fontWeight: '700' }}>
             ({item.coach || 'No Coach'}{item.seat ? ` / ${item.seat}` : ''})
           </Text>
         </Text>
 
-        <View style={{ flex: 0.9 }}>
+        <View style={isMobile ? { width: COL_W.payment } : { flex: 0.9 }}>
           <Text style={[styles.paymentTag, { color: paymentColor, borderColor: paymentColor }]}>
             {paymentLabel}
           </Text>
         </View>
 
         {/* ── ACTIONS ── */}
-        <View style={{ flex: 1.2, flexDirection: 'row', justifyContent: 'center', gap: 6 }}>
+        <View style={[
+          isMobile ? { width: COL_W.actions } : { flex: 1.2 },
+          { flexDirection: 'row', justifyContent: 'center', gap: 6 },
+        ]}>
           <View style={{ position: 'relative' }}>
             <TouchableOpacity ref={assignBtnRef} style={styles.assignBtn} onPress={handleAssignPress}>
               <Ionicons name="bicycle-outline" size={16} color="#ffffff" />
@@ -411,7 +317,176 @@ const ExpandableOrderRow = ({ item, onPrint, onAssign, isPrinted, isMobile }) =>
         </View>
       </TouchableOpacity>
 
-      {expanded && <ExpandedDetails />}
+      {expanded && (
+        <View style={[styles.expandedContent, isMobile && { width: TABLE_WIDTH }]}>
+          {isMobile ? (
+            <>
+              {/* ── Mobile tab switcher — keeps expanded card short ── */}
+              <View style={styles.mobileTabBar}>
+                {MOBILE_TABS.map(tab => (
+                  <TouchableOpacity
+                    key={tab.key}
+                    style={[styles.mobileTabBtn, mobileTab === tab.key && styles.mobileTabBtnActive]}
+                    onPress={() => setMobileTab(tab.key)}
+                  >
+                    <Ionicons
+                      name={tab.icon}
+                      size={14}
+                      color={mobileTab === tab.key ? '#ffffff' : '#64748b'}
+                    />
+                    <Text style={[styles.mobileTabText, mobileTab === tab.key && styles.mobileTabTextActive]}>
+                      {tab.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* ── Only the active tab's content renders ── */}
+              {mobileTab === 'items' && (
+                <View style={styles.expandSectionLeft}>
+                  <View style={styles.miniTableHeader}>
+                    <Text style={[styles.miniHeadText, { flex: 1 }]}>ITEM NAME</Text>
+                    <Text style={[styles.miniHeadText, { width: 56, textAlign: 'center' }]}>QTY</Text>
+                  </View>
+                  <ScrollView style={{ maxHeight: 220 }} showsVerticalScrollIndicator={false}>
+                    {item.items && item.items.map((prod, idx) => (
+                      <View key={idx} style={styles.miniTableRow}>
+                        <Text style={[styles.miniCellText, { flex: 1 }]}>{prod.name}</Text>
+                        <Text style={[styles.miniCellText, { width: 56, textAlign: 'center', fontWeight: '700', color: '#0f172a' }]}>
+                          {prod.quantity}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+
+              {mobileTab === 'customer' && (
+                <View style={styles.expandSectionMid}>
+                  <Text style={styles.sectionLabel}>CUSTOMER DETAILS</Text>
+                  <Text style={styles.remarkText}>{item.customerName}</Text>
+                  <Text style={[styles.remarkText, { color: '#475569', fontWeight: '700' }]}>Mo: {item.contactNo}</Text>
+
+                  {item.remark && item.remark.trim() !== '' && (
+                    <View style={styles.remarkBox}>
+                      <Text style={styles.remarkAlertText}>⚠ SPECIAL INSTRUCTIONS</Text>
+                      <Text style={styles.remarkContentText}>{item.remark}</Text>
+                    </View>
+                  )}
+
+                  {item.assignedExecutiveName && (
+                    <View style={styles.assignedBadgeBox}>
+                      <Text style={styles.assignedBadgeLabel}>ASSIGNED TO:</Text>
+                      <Text style={styles.assignedBadgeName}>{item.assignedExecutiveName}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {mobileTab === 'billing' && (
+                <View style={styles.expandSectionRight}>
+                  <Text style={styles.sectionLabel}>BILLING SUMMARY</Text>
+                  <View style={styles.financeRow}>
+                    <Text style={styles.financeLabel}>Sub Total</Text>
+                    <Text style={styles.financeValue}>₹ {item.subTotal || 0}</Text>
+                  </View>
+                  <View style={styles.financeRow}>
+                    <Text style={styles.financeLabel}>Tax / GST</Text>
+                    <Text style={styles.financeValue}>₹ {item.tax || 0}</Text>
+                  </View>
+                  <View style={styles.financeRow}>
+                    <Text style={styles.financeLabel}>Delivery</Text>
+                    <Text style={styles.financeValue}>₹ {item.deliveryCharge || 0}</Text>
+                  </View>
+                  <View style={styles.financeDivider} />
+                  <View style={styles.financeRow}>
+                    <Text style={[styles.financeLabel, { fontWeight: '700', color: '#0f172a' }]}>TOTAL BILL</Text>
+                    <Text style={[styles.financeValue, { fontSize: 15, fontWeight: '800', color: '#0f172a' }]}>
+                      ₹ {item.totalAmount || 0}
+                    </Text>
+                  </View>
+                  {isCOD && (
+                    <View style={styles.amountToCollectBar}>
+                      <Text style={styles.atcLabel}>COLLECT CASH</Text>
+                      <Text style={styles.atcValue}>₹ {amountToCollect}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </>
+          ) : (
+            // ── Desktop: unchanged, exactly as before ──
+            <View style={styles.expandedLayout}>
+              {/* LEFT — Items */}
+              <View style={styles.expandSectionLeft}>
+                <View style={styles.miniTableHeader}>
+                  <Text style={[styles.miniHeadText, { flex: 1 }]}>ITEM NAME</Text>
+                  <Text style={[styles.miniHeadText, { width: 56, textAlign: 'center' }]}>QTY</Text>
+                </View>
+                {item.items && item.items.map((prod, idx) => (
+                  <View key={idx} style={styles.miniTableRow}>
+                    <Text style={[styles.miniCellText, { flex: 1 }]}>{prod.name}</Text>
+                    <Text style={[styles.miniCellText, { width: 56, textAlign: 'center', fontWeight: '700', color: '#0f172a' }]}>
+                      {prod.quantity}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
+              {/* MID — Customer */}
+              <View style={styles.expandSectionMid}>
+                <Text style={styles.sectionLabel}>CUSTOMER DETAILS</Text>
+                <Text style={styles.remarkText}>{item.customerName}</Text>
+                <Text style={[styles.remarkText, { color: '#475569', fontWeight: '700' }]}>Mo: {item.contactNo}</Text>
+
+                {item.remark && item.remark.trim() !== '' && (
+                  <View style={styles.remarkBox}>
+                    <Text style={styles.remarkAlertText}>⚠ SPECIAL INSTRUCTIONS</Text>
+                    <Text style={styles.remarkContentText}>{item.remark}</Text>
+                  </View>
+                )}
+
+                {item.assignedExecutiveName && (
+                  <View style={styles.assignedBadgeBox}>
+                    <Text style={styles.assignedBadgeLabel}>ASSIGNED TO:</Text>
+                    <Text style={styles.assignedBadgeName}>{item.assignedExecutiveName}</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* RIGHT — Billing */}
+              <View style={styles.expandSectionRight}>
+                <Text style={styles.sectionLabel}>BILLING SUMMARY</Text>
+                <View style={styles.financeRow}>
+                  <Text style={styles.financeLabel}>Sub Total</Text>
+                  <Text style={styles.financeValue}>₹ {item.subTotal || 0}</Text>
+                </View>
+                <View style={styles.financeRow}>
+                  <Text style={styles.financeLabel}>Tax / GST</Text>
+                  <Text style={styles.financeValue}>₹ {item.tax || 0}</Text>
+                </View>
+                <View style={styles.financeRow}>
+                  <Text style={styles.financeLabel}>Delivery</Text>
+                  <Text style={styles.financeValue}>₹ {item.deliveryCharge || 0}</Text>
+                </View>
+                <View style={styles.financeDivider} />
+                <View style={styles.financeRow}>
+                  <Text style={[styles.financeLabel, { fontWeight: '700', color: '#0f172a' }]}>TOTAL BILL</Text>
+                  <Text style={[styles.financeValue, { fontSize: 15, fontWeight: '800', color: '#0f172a' }]}>
+                    ₹ {item.totalAmount || 0}
+                  </Text>
+                </View>
+                {isCOD && (
+                  <View style={styles.amountToCollectBar}>
+                    <Text style={styles.atcLabel}>COLLECT CASH</Text>
+                    <Text style={styles.atcValue}>₹ {amountToCollect}</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          )}
+        </View>
+      )}
     </View>
   );
 };
@@ -433,34 +508,24 @@ const SkeletonRow = ({ isMobile }) => {
 
   const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
 
-  const Box = ({ flex, width, height = 12 }) => (
+  const Box = ({ flex, width }) => (
     <Animated.View style={{
-      height, borderRadius: 4, backgroundColor: '#e2e8f0',
+      height: 12, borderRadius: 4, backgroundColor: '#e2e8f0',
       opacity, flex, width,
     }} />
   );
 
-  if (isMobile) {
-    return (
-      <View style={{ padding: 14, gap: 8 }}>
-        <Box height={18} width="60%" />
-        <Box height={12} width="80%" />
-        <Box height={12} width="50%" />
-      </View>
-    );
-  }
-
   return (
-    <View style={[styles.tableRow, { gap: 12 }]}>
+    <View style={[styles.tableRow, { gap: 12 }, isMobile && { width: TABLE_WIDTH }]}>
       <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#e2e8f0', opacity: 0.5 }} />
-      <Box flex={0.8} />
-      <Box flex={1.1} />
-      <Box flex={1.0} />
-      <Box flex={0.8} />
-      <Box flex={1.2} />
-      <Box flex={1.2} />
-      <Box flex={0.9} />
-      <Box flex={1.2} />
+      <Box {...(isMobile ? { width: COL_W.status } : { flex: 0.8 })} />
+      <Box {...(isMobile ? { width: COL_W.orderNo } : { flex: 1.1 })} />
+      <Box {...(isMobile ? { width: COL_W.date } : { flex: 1.0 })} />
+      <Box {...(isMobile ? { width: COL_W.time } : { flex: 0.8 })} />
+      <Box {...(isMobile ? { width: COL_W.vendor } : { flex: 1.2 })} />
+      <Box {...(isMobile ? { width: COL_W.train } : { flex: 1.2 })} />
+      <Box {...(isMobile ? { width: COL_W.payment } : { flex: 0.9 })} />
+      <Box {...(isMobile ? { width: COL_W.actions } : { flex: 1.2 })} />
     </View>
   );
 };
@@ -790,6 +855,54 @@ export default function DashboardScreen({ clientId }) {
     setAssignModalVisible(false);
   };
 
+  // ── Shared header row (used inside the scroll wrapper on mobile, and
+  //    directly on desktop) ──
+  const TableHeader = () => (
+    <View style={[styles.tableHeader, isMobile && { width: TABLE_WIDTH }]}>
+      <View style={{ width: 36 }} />
+      <Text style={[styles.col, isMobile ? { width: COL_W.status } : { flex: 0.8 }]}>STATUS</Text>
+      <Text style={[styles.col, isMobile ? { width: COL_W.orderNo } : { flex: 1.1 }]}>ORDER NO.</Text>
+      <Text style={[styles.col, isMobile ? { width: COL_W.date } : { flex: 1.0 }]}>DEL. DATE</Text>
+      <Text style={[styles.col, isMobile ? { width: COL_W.time } : { flex: 0.8 }]}>DEL. TIME</Text>
+      <Text style={[styles.col, isMobile ? { width: COL_W.vendor } : { flex: 1.2 }]}>VENDOR</Text>
+      <Text style={[styles.col, isMobile ? { width: COL_W.train } : { flex: 1.2 }]}>TRAIN</Text>
+      <Text style={[styles.col, isMobile ? { width: COL_W.payment } : { flex: 0.9 }]}>PAYMENT</Text>
+      <Text style={[styles.col, isMobile ? { width: COL_W.actions } : { flex: 1.2 }, { textAlign: 'center' }]}>ACTIONS</Text>
+    </View>
+  );
+
+  // ── Body: skeleton / empty / list — same content either way ──
+  const TableBody = () => (
+    loading ? (
+      <SkeletonLoader isMobile={isMobile} />
+    ) : activeOrders.length === 0 ? (
+      <View style={[styles.emptyState, isMobile && { width: TABLE_WIDTH }]}>
+        <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
+        <Text style={styles.emptyStateText}>
+          {todayOnly ? "No active orders for today" : "No active orders right now"}
+        </Text>
+      </View>
+    ) : (
+      <FlatList
+        data={pagedOrders}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => (
+          <ExpandableOrderRow
+            item={item}
+            onPrint={handlePrint}
+            onAssign={openAssignModal}
+            isPrinted={printedOrders.has(item.id)}
+            isMobile={isMobile}
+          />
+        )}
+        style={[{ flex: 1 }, isMobile && { width: TABLE_WIDTH }]}
+        contentContainerStyle={{ paddingBottom: 0, flexGrow: 1 }}
+        showsVerticalScrollIndicator={false}
+        showsHorizontalScrollIndicator={false}
+      />
+    )
+  );
+
   return (
     <SafeAreaView style={styles.container}>
 
@@ -825,64 +938,39 @@ export default function DashboardScreen({ clientId }) {
         </TouchableOpacity>
       </View>
 
-      {/* ── Table / Card container ── */}
+      {/* ── Table container ── */}
       <View style={styles.tableContainer}>
-        {/* Column header row — desktop only. On mobile the card layout
-            already labels each value, so a header row isn't needed. */}
-        {!isMobile && (
-          <View style={styles.tableHeader}>
-            <View style={{ width: 36 }} />
-            <Text style={[styles.col, { flex: 0.8 }]}>STATUS</Text>
-            <Text style={[styles.col, { flex: 1.1 }]}>ORDER NO.</Text>
-            <Text style={[styles.col, { flex: 1.0 }]}>DEL. DATE</Text>
-            <Text style={[styles.col, { flex: 0.8 }]}>DEL. TIME</Text>
-            <Text style={[styles.col, { flex: 1.2 }]}>VENDOR</Text>
-            <Text style={[styles.col, { flex: 1.2 }]}>TRAIN</Text>
-            <Text style={[styles.col, { flex: 0.9 }]}>PAYMENT</Text>
-            <Text style={[styles.col, { flex: 1.2, textAlign: 'center' }]}>ACTIONS</Text>
-          </View>
+        {isMobile ? (
+          // Mobile: same table, wrapped in a horizontal ScrollView so wide
+          // (fixed-width) columns can be reached by side-scrolling instead
+          // of being compressed/overlapped.
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator
+            style={{ flex: 1 }}
+            contentContainerStyle={{ minWidth: TABLE_WIDTH }}
+          >
+            <View style={{ width: TABLE_WIDTH, flex: 1 }}>
+              <TableHeader />
+              <TableBody />
+            </View>
+          </ScrollView>
+        ) : (
+          // Desktop: unchanged, exactly as before.
+          <>
+            <TableHeader />
+            <TableBody />
+          </>
         )}
 
-        {loading ? (
-            <SkeletonLoader isMobile={isMobile} />
-        ) : activeOrders.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
-            <Text style={styles.emptyStateText}>
-              {todayOnly ? "No active orders for today" : "No active orders right now"}
-            </Text>
-          </View>
-        ) : (
-          <>
-            <FlatList
-              data={pagedOrders}
-              keyExtractor={item => item.id}
-              renderItem={({ item }) => (
-                <ExpandableOrderRow
-                  item={item}
-                  onPrint={handlePrint}
-                  onAssign={openAssignModal}
-                  isPrinted={printedOrders.has(item.id)}
-                  isMobile={isMobile}
-                />
-              )}
-              style={{ flex: 1 }}
-              contentContainerStyle={[
-                { paddingBottom: 0, flexGrow: 1 },
-                isMobile && { padding: 10, gap: 10 },
-              ]}
-              showsVerticalScrollIndicator={false}
-              showsHorizontalScrollIndicator={false}
-            />
-
-            <PaginationBar
-              currentPage={currentPage}
-              totalItems={totalItems}
-              itemsPerPage={itemsPerPage}
-              onPageChange={handlePageChange}
-              onItemsPerPageChange={handleItemsPerPageChange}
-            />
-          </>
+        {!loading && activeOrders.length > 0 && (
+          <PaginationBar
+            currentPage={currentPage}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            onPageChange={handlePageChange}
+            onItemsPerPageChange={handleItemsPerPageChange}
+          />
         )}
       </View>
 
@@ -896,9 +984,7 @@ export default function DashboardScreen({ clientId }) {
           <View
             style={[
               styles.dropdownContainer,
-              isMobile
-                ? { top: undefined, bottom: 40, left: 20, right: 20, width: undefined }
-                : { top: dropdownPos.y + dropdownPos.height + 6, left: dropdownPos.x - 180 },
+              { top: dropdownPos.y + dropdownPos.height + 6, left: dropdownPos.x - 180 },
             ]}
           >
             <Text style={styles.dropdownTitle}>ASSIGN EXECUTIVE</Text>
@@ -998,46 +1084,24 @@ const styles = StyleSheet.create({
   emptyState:     { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
   emptyStateText: { fontSize: 14, color: '#94a3b8' },
 
-  // ── Mobile card layout ────────────────────────────────────────────────────
-  mobileCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 14,
-    gap: 8,
-  },
-  mobileTopRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-  },
-  mobileOrderNo: {
-    flex: 1, fontSize: 14, fontWeight: '800', color: '#0f172a',
-  },
-  mobileMidRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-  },
-  mobileVendor: {
-    flex: 1, fontSize: 13, fontWeight: '700', color: '#334155',
-  },
-  mobileMeta: {
-    fontSize: 11.5, color: '#64748b', fontWeight: '600',
-  },
-  mobileTrain: {
-    fontSize: 12.5, color: '#334155', fontWeight: '600',
-  },
-  mobileBottomRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2,
-  },
-  mobileExpandDot: {
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: '#94a3b8', alignItems: 'center', justifyContent: 'center',
-  },
-
   expandedContent: {
     backgroundColor: '#f8fafc', padding: 16,
     borderTopWidth: 1, borderTopColor: '#e2e8f0',
   },
   expandedLayout: { flexDirection: 'row', gap: 16 },
+
+  // ── Mobile tab switcher (Items / Customer / Billing) ──
+  mobileTabBar: {
+    flexDirection: 'row', gap: 6, marginBottom: 12,
+    backgroundColor: '#f1f5f9', borderRadius: 8, padding: 4,
+  },
+  mobileTabBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 5, paddingVertical: 8, borderRadius: 6,
+  },
+  mobileTabBtnActive: { backgroundColor: '#0f172a' },
+  mobileTabText: { fontSize: 11, fontWeight: '700', color: '#64748b', letterSpacing: 0.4 },
+  mobileTabTextActive: { color: '#ffffff' },
 
   expandSectionLeft: {
     flex: 1.5, backgroundColor: 'white', borderRadius: 6,
