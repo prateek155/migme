@@ -62,6 +62,9 @@ const vendors = [
   irctc,
   gofood,
   travelkhana,
+  railrestro,
+  jaipurrasoionrails,
+  olf,
   generic,
 ];
 
