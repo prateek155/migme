@@ -5,7 +5,7 @@ import {
 } from "firebase/firestore";
 // ⚠️ Adjust this relative path to match where firebaseConfig.js actually lives
 // (same pattern already used in AddOrderScreen.js: `import { db } from '../firebaseConfig';`)
-import { db } from "../firebaseConfig";
+import { db } from "../src/firebaseConfig";
 
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE COLLECTIONS
