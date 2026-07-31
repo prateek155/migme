@@ -1496,15 +1496,41 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
 
       const firstText = cells.eq(0).text().trim();
       const secondText = cells.eq(1).text().trim();
-      const isFooter =
-        (!firstText &&
-          footerLabels.some((l) =>
-            secondText.toLowerCase().includes(l.toLowerCase()),
-          )) ||
-        footerLabels.some((l) =>
-          firstText.toLowerCase().includes(l.toLowerCase()),
+
+      let labelText, valueText, isFooter;
+
+      if (domConfig.itemsTable.captureFooterMap) {
+        // generic last-two-cells detection — sirf opt-in vendors ke liye
+        labelText = cells.eq(cells.length - 2).text().replace(/\s+/g, " ").trim();
+        valueText = cells.eq(cells.length - 1).text().replace(/\s+/g, " ").trim();
+        isFooter = footerLabels.some((l) =>
+          labelText.toLowerCase().includes(l.toLowerCase()),
         );
+      } else {
+        // purana behavior — kisi bhi existing vendor ke liye untouched
+        labelText = firstText || secondText;
+        valueText = cells.last().text().trim();
+        isFooter =
+          (!firstText &&
+            footerLabels.some((l) =>
+              secondText.toLowerCase().includes(l.toLowerCase()),
+            )) ||
+          footerLabels.some((l) =>
+            firstText.toLowerCase().includes(l.toLowerCase()),
+          );
+      }
       if (isFooter) {
+        if (domConfig.itemsTable.captureFooterMap) {
+          if (!order._footerMap) order._footerMap = {};
+          const normalized = labelText
+            .toLowerCase()
+            .replace(/:+\s*$/, "")
+            .replace(/[()]/g, "")
+            .trim();
+          const numVal =
+            parseFloat(valueText.replace(/rs\.?/i, "").replace(/,/g, "")) || 0;
+          order._footerMap[normalized] = numVal;
+        }
         if (domConfig.itemsTable.captureFooterTotal) {
           const captureConfig = domConfig.itemsTable.captureFooterTotal;
           const isMultiCapture = Array.isArray(captureConfig);
