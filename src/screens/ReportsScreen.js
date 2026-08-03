@@ -741,7 +741,7 @@ export default function ReportsScreen({ clientId }) {
 
   const [showPeriodDrop, setPeriodDrop] = useState(false);
   const [showStatusDrop, setStatusDrop] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('All');
+  const [statusFilter, setStatusFilter] = useState('Completed');
   const [search, setSearch]             = useState('');
 
   const { width: sw } = Dimensions.get('window');
