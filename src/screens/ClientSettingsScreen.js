@@ -55,21 +55,31 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
   const isWide = screenWidth >= 768;
 
   useEffect(() => {
-    if (!clientId) return;
+    console.log('🟢 [useEffect] clientId received:', clientId);
+    if (!clientId) {
+      console.log('🔴 [useEffect] clientId is missing/falsy — aborting fetch, loading will stay stuck if this never changes');
+      return;
+    }
     (async () => {
       try {
+        console.log('🟢 [useEffect] Fetching doc: clients/' + clientId);
         const snap = await getDoc(doc(db, 'clients', clientId));
+        console.log('🟢 [useEffect] Doc exists?', snap.exists());
         if (snap.exists()) {
           const data = snap.data();
+          console.log('🟢 [useEffect] Firestore data:', JSON.stringify(data));
+          console.log('🟢 [useEffect] password field value:', JSON.stringify(data.password));
           setStoredPassword(data.password || '');
           const pid = data.paymentId || '';
           setPaymentId(pid);
           setSavedPaymentId(pid);
           setEditingPayment(!pid); // auto-open editor if no ID yet
           setSelectedSound(data.alertSound || SOUND_OPTIONS[0].url);
+        } else {
+          console.log('🔴 [useEffect] No document found at clients/' + clientId + ' — storedPassword will remain empty string');
         }
       } catch (e) {
-        console.error('ClientSettingsScreen load error:', e.message);
+        console.error('🔴 [useEffect] ClientSettingsScreen load error:', e.message, e.code || '');
       }
       setLoading(false);
     })();
@@ -77,30 +87,44 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
 
   /* ── Password ── */
   const handleChangePassword = async () => {
-    console.log('🔵 BUTTON CLICKED - function started');
+    console.log('🔵 [handleChangePassword] BUTTON CLICKED - function started');
+    console.log('🔵 [handleChangePassword] clientId:', clientId);
+    console.log('🔵 [handleChangePassword] currentPwd (typed):', JSON.stringify(currentPwd));
+    console.log('🔵 [handleChangePassword] storedPassword (from Firestore):', JSON.stringify(storedPassword));
+    console.log('🔵 [handleChangePassword] newPwd:', JSON.stringify(newPwd));
+    console.log('🔵 [handleChangePassword] confirmPwd:', JSON.stringify(confirmPwd));
+
     if (!currentPwd || !newPwd || !confirmPwd) {
+      console.log('🔴 [handleChangePassword] BLOCKED: missing fields');
       Alert.alert('Missing Fields', 'Please fill in all password fields');
       return;
     }
     if (currentPwd !== storedPassword) {
+      console.log('🔴 [handleChangePassword] BLOCKED: currentPwd does not match storedPassword');
       Alert.alert('Incorrect Password', 'Current password does not match');
       return;
     }
     if (newPwd.length < 4) {
+      console.log('🔴 [handleChangePassword] BLOCKED: new password too short');
       Alert.alert('Too Short', 'New password must be at least 4 characters');
       return;
     }
     if (newPwd !== confirmPwd) {
+      console.log('🔴 [handleChangePassword] BLOCKED: newPwd !== confirmPwd');
       Alert.alert('Mismatch', 'New password and confirm password do not match');
       return;
     }
+
+    console.log('🟢 [handleChangePassword] All checks passed — calling updateDoc now');
     setSavingPwd(true);
     try {
       await updateDoc(doc(db, 'clients', clientId), { password: newPwd });
+      console.log('🟢 [handleChangePassword] updateDoc SUCCESS');
       setStoredPassword(newPwd);
       setCurrentPwd(''); setNewPwd(''); setConfirmPwd('');
       Alert.alert('✓ Password Updated', 'Your password has been changed successfully');
     } catch (e) {
+      console.log('🔴 [handleChangePassword] updateDoc FAILED:', e.code, e.message);
       Alert.alert('Error', e.message);
     }
     setSavingPwd(false);
