@@ -30,7 +30,7 @@ export default function ClientLoginScreen({ onLogin }) {
 
       if (clientData.active === false) { Alert.alert("Account Disabled", "Please contact your administrator"); setLoading(false); return; }
 
-      const loginPayload = { id: snap.docs[0].id, uid: uid, ...clientData };
+      const loginPayload = { ...clientData, id: snap.docs[0].id, uid: uid };
       console.log('✅ Calling onLogin with payload:', JSON.stringify(loginPayload), 'role: client');
       onLogin(loginPayload, 'client');
 
