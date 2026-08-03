@@ -33,6 +33,7 @@ const SCREEN_PATHS = {
   'Add Order':    '/add-order',
   Menu:           '/menu',
   Reports:        '/reports',
+  'All Orders':   '/all-orders',
   Delivered:      '/delivered',
   Cancelled:      '/cancelled',
   'Delivery Team':'/delivery-team',
@@ -319,6 +320,14 @@ export default function App() {
       case 'Add Order':     return <AddOrderScreen onNavigate={navigateToScreen} clientId={clientId} />;
       case 'Menu':          return <MenuScreen clientId={clientId} />;
       case 'Reports':       return <ReportsScreen clientId={clientId} />;
+      case 'All Orders':
+        return (
+          <FilteredOrdersScreen
+            statusFilter={['Completed', 'Cancelled']}
+            title="All Orders"
+            clientId={clientId}
+          />
+        );
       case 'Delivered':     return <FilteredOrdersScreen statusFilter="Completed" title="Delivered Orders" clientId={clientId} />;
       case 'Cancelled':     return <FilteredOrdersScreen statusFilter="Cancelled" title="Cancelled Orders" clientId={clientId} />;
       case 'Delivery Team': return <DeliveryExecutiveScreen clientId={clientId} />;
@@ -370,6 +379,7 @@ export default function App() {
             <ClientNavItem icon="restaurant-outline"       label="Menu"          screen="Menu" />
             <ClientNavItem icon="bar-chart-outline"        label="Reports"       screen="Reports" />
             <ClientNavItem icon="bicycle-outline"          label="Delivery Team" screen="Delivery Team" />
+            <ClientNavItem icon="layers-outline"           label="All Orders"    screen="All Orders" />
             <ClientNavItem icon="checkmark-circle-outline" label="Delivered"     screen="Delivered" />
             <ClientNavItem icon="close-circle-outline"     label="Cancelled"     screen="Cancelled" />
             <ClientNavItem icon="settings-outline"         label="Settings"      screen="Settings" />
