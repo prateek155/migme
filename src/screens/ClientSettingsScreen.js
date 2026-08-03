@@ -77,6 +77,7 @@ export default function ClientSettingsScreen({ clientId, clientEmail, onNavigate
 
   /* ── Password ── */
   const handleChangePassword = async () => {
+    console.log('🔵 BUTTON CLICKED - function started');
     if (!currentPwd || !newPwd || !confirmPwd) {
       Alert.alert('Missing Fields', 'Please fill in all password fields');
       return;
