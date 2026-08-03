@@ -14,6 +14,36 @@ const STATUS_OPTIONS    = ['Active', 'Confirmed', 'Cancelled'];
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Date helpers (used only for the "All Orders" grouped view)
+// ─────────────────────────────────────────────────────────────────────────────
+const toMillis = (val) => {
+  if (!val) return 0;
+  if (val?.toDate) return val.toDate().getTime();
+  const d = new Date(val).getTime();
+  return isNaN(d) ? 0 : d;
+};
+
+const startOfDay = (dt) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
+
+const getDateKey = (dateVal) => {
+  const ms = toMillis(dateVal);
+  if (!ms) return 'no-date';
+  return String(startOfDay(new Date(ms)));
+};
+
+const getDateHeaderLabel = (dateVal) => {
+  const ms = toMillis(dateVal);
+  if (!ms) return 'No Date';
+  const d = new Date(ms);
+  const today = new Date();
+  const diffDays = Math.round((startOfDay(today) - startOfDay(d)) / 86400000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays === -1) return 'Tomorrow';
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Expandable Order Row
 // ─────────────────────────────────────────────────────────────────────────────
 const ExpandableOrderRow = ({ item, onUpdateStatus, onAssign }) => {
@@ -276,6 +306,17 @@ const ExpandableOrderRow = ({ item, onUpdateStatus, onAssign }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Date section header (used only in the "All Orders" grouped view)
+// ─────────────────────────────────────────────────────────────────────────────
+const DateSectionHeader = ({ label }) => (
+  <View style={styles.dateHeaderRow}>
+    <View style={styles.dateHeaderLine} />
+    <Text style={styles.dateHeaderText}>{label}</Text>
+    <View style={styles.dateHeaderLine} />
+  </View>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Pagination Bar
 // ─────────────────────────────────────────────────────────────────────────────
 const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange }) => {
@@ -391,6 +432,11 @@ const SkeletonLoader = () => (
 // ─────────────────────────────────────────────────────────────────────────────
 // Screen
 // ─────────────────────────────────────────────────────────────────────────────
+// `statusFilter` can be:
+//   - a single string, e.g. "Completed"  → behaves exactly as before
+//   - an array of strings, e.g. ["Completed", "Cancelled"] → "All Orders" mode:
+//     fetches every status in the array and groups rows by delivery date,
+//     with the current date at the top and older dates continuing below.
 export default function FilteredOrdersScreen({ statusFilter, title, clientId }) {
   const [orders, setOrders]                 = useState([]);
   const [filteredOrders, setFilteredOrders] = useState([]);
@@ -407,11 +453,27 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   const [selectedOrder, setSelectedOrder]           = useState(null);
   const [assignDropdownPos, setAssignDropdownPos]   = useState({ x: 0, y: 0, width: 0, height: 0 });
 
+  const isAllOrders = Array.isArray(statusFilter);
+
   // Derived pagination values
   const totalItems  = filteredOrders.length;
   const totalPages  = Math.max(1, Math.ceil(totalItems / itemsPerPage));
   const startIdx    = (currentPage - 1) * itemsPerPage;
   const pagedOrders = filteredOrders.slice(startIdx, startIdx + itemsPerPage);
+
+  // When in "All Orders" mode, attach date-section-header info to each row
+  // so the list reads: Today's orders → Yesterday's → the day before, etc.
+  const displayData = isAllOrders
+    ? pagedOrders.map((ord, idx) => {
+        const currKey = getDateKey(ord.deliveryDate);
+        const prevKey = idx === 0 ? null : getDateKey(pagedOrders[idx - 1].deliveryDate);
+        return {
+          ...ord,
+          _showDateHeader: currKey !== prevKey,
+          _dateHeaderLabel: getDateHeaderLabel(ord.deliveryDate),
+        };
+      })
+    : pagedOrders;
 
   // ── Fetch executives ──
   useEffect(() => {
@@ -425,29 +487,43 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
 
   // ── Fetch orders ──
   useEffect(() => {
+    const statusArray = isAllOrders ? statusFilter : [statusFilter];
+
     const q = query(
       collection(db, 'orders'),
       where('clientId', '==', clientId),
-      where('status', '==', statusFilter)
+      where('status', 'in', statusArray) // works for both a single status and multiple statuses
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      // Sort: bill-printed first (desc by printedAt), then by createdAt desc
-      list.sort((a, b) => {
-        const toMs = (val) => {
-          if (!val) return 0;
-          if (val?.toDate) return val.toDate().getTime();
-          const d = new Date(val).getTime();
-          return isNaN(d) ? 0 : d;
-        };
-        const aPrinted = !!a.billPrintedAt;
-        const bPrinted = !!b.billPrintedAt;
-        if (aPrinted && !bPrinted) return -1;
-        if (!aPrinted && bPrinted) return 1;
-        if (aPrinted && bPrinted) return toMs(b.billPrintedAt) - toMs(a.billPrintedAt);
-        return toMs(b.createdAt) - toMs(a.createdAt);
-      });
+      if (isAllOrders) {
+        // "All Orders" view: group continuously by delivery date —
+        // current/most-recent date first, then older dates after it.
+        list.sort((a, b) => {
+          const aDateMs = toMillis(a.deliveryDate);
+          const bDateMs = toMillis(b.deliveryDate);
+          if (aDateMs !== bDateMs) return bDateMs - aDateMs; // newest date first
+
+          // Same date → keep bill-printed-first, then most recent createdAt
+          const aPrinted = !!a.billPrintedAt;
+          const bPrinted = !!b.billPrintedAt;
+          if (aPrinted && !bPrinted) return -1;
+          if (!aPrinted && bPrinted) return 1;
+          if (aPrinted && bPrinted) return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
+          return toMillis(b.createdAt) - toMillis(a.createdAt);
+        });
+      } else {
+        // Original sort: bill-printed first (desc by printedAt), then by createdAt desc
+        list.sort((a, b) => {
+          const aPrinted = !!a.billPrintedAt;
+          const bPrinted = !!b.billPrintedAt;
+          if (aPrinted && !bPrinted) return -1;
+          if (!aPrinted && bPrinted) return 1;
+          if (aPrinted && bPrinted) return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
+          return toMillis(b.createdAt) - toMillis(a.createdAt);
+        });
+      }
 
       setOrders(list);
       setLoading(false);
@@ -456,7 +532,8 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
       setLoading(false);
     });
     return () => unsubscribe();
-  }, [statusFilter, clientId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAllOrders ? JSON.stringify(statusFilter) : statusFilter, clientId]);
 
   // ── Effect 1: Filter orders whenever orders list or search query changes ──
   // ✅ Does NOT reset the page — so staying on page 2/3 is preserved
@@ -530,6 +607,8 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
     setCurrentPage(Math.min(Math.max(1, page), totalPages));
   };
 
+  const statusLabelLower = isAllOrders ? '' : String(statusFilter).toLowerCase();
+
   return (
     <View style={styles.container}>
 
@@ -539,9 +618,10 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           <Text style={styles.heading}>{title}</Text>
           <View style={styles.countRow}>
             <View style={[styles.countDot, {
-              backgroundColor:
-                statusFilter === 'Completed' ? '#16a34a' :
-                statusFilter === 'Cancelled' ? '#dc2626' : '#f59e0b',
+              backgroundColor: isAllOrders
+                ? '#6366f1'
+                : statusFilter === 'Completed' ? '#16a34a' :
+                  statusFilter === 'Cancelled' ? '#dc2626' : '#f59e0b',
             }]} />
             <Text style={styles.subHeading}>
               {loading ? '…' : `${filteredOrders.length} ${filteredOrders.length === 1 ? 'order' : 'orders'} found`}
@@ -589,21 +669,26 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           <View style={styles.emptyState}>
             <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
             <Text style={styles.emptyStateText}>
-              {searchQuery ? 'No orders match your search' : `No ${statusFilter.toLowerCase()} orders`}
+              {searchQuery ? 'No orders match your search' : `No ${statusLabelLower} orders`}
             </Text>
           </View>
         ) : (
           <>
             {/* ── Rows ── */}
             <FlatList
-              data={pagedOrders}
+              data={displayData}
               keyExtractor={item => item.id}
               renderItem={({ item }) => (
-                <ExpandableOrderRow
-                  item={item}
-                  onUpdateStatus={handleUpdateStatus}
-                  onAssign={openAssignModal}
-                />
+                <>
+                  {isAllOrders && item._showDateHeader && (
+                    <DateSectionHeader label={item._dateHeaderLabel} />
+                  )}
+                  <ExpandableOrderRow
+                    item={item}
+                    onUpdateStatus={handleUpdateStatus}
+                    onAssign={openAssignModal}
+                  />
+                </>
               )}
               style={{ flex: 1 }}
               contentContainerStyle={{ paddingBottom: 0, flexGrow: 1 }}
@@ -749,6 +834,18 @@ const styles = StyleSheet.create({
     paddingVertical: 12, paddingHorizontal: 12, alignItems: 'center',
   },
   col: { fontSize: 10, fontWeight: '700', color: '#ffffff', letterSpacing: 0.8 },
+
+  // ── Date section header (All Orders view) ──
+  dateHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6,
+    backgroundColor: '#f8fafc',
+  },
+  dateHeaderLine: { flex: 1, height: 1, backgroundColor: '#e2e8f0' },
+  dateHeaderText: {
+    fontSize: 11, fontWeight: '800', color: '#475569',
+    letterSpacing: 0.6, textTransform: 'uppercase',
+  },
 
   cardContainer: { borderBottomWidth: 1, borderColor: '#f1f5f9' },
   tableRow: {
