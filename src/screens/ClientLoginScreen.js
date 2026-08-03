@@ -81,7 +81,7 @@ export default function ClientLoginScreen({ onLogin }) {
             } catch (_) {}
           }
 
-          const loginPayload = { id: clientDoc.id, uid: uid, ...clientData };
+          const loginPayload = { ...clientData, id: clientDoc.id, uid: uid };
           console.log('✅ Fallback: Calling onLogin with:', JSON.stringify(loginPayload), 'role: client');
           onLogin(loginPayload, 'client');
 
