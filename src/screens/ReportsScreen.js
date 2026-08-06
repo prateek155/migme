@@ -759,7 +759,7 @@ export default function ReportsScreen({ clientId }) {
 
   useEffect(() => {
     if (!clientId) return;
-    const q = query(collection(db, 'orders'), where('clientId', '==', clientId));
+    const q = query( collection(db, "orders"), where("clientId", "==", clientId), where("status", "in", ["Completed", "Cancelled"]) );
     const unsub = onSnapshot(q, snap => {
       console.log("Reports Orders received:", snap.docs.length);
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
