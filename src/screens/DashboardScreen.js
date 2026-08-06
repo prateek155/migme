@@ -624,7 +624,13 @@ export default function DashboardScreen({ clientId }) {
   // ── Fetch orders + executives ──
   useEffect(() => {
     if (!appReady) return;
-    const q = query(collection(db, 'orders'), where('clientId', '==', clientId));
+    const q = query(collection(db, "orders"), where("clientId", "==", clientId), where("status", "in", [
+    "Active",
+    "Confirm",
+    "Confirmed",
+    "confirmed",
+    ])
+  );
     const unsubscribeOrders = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => {
