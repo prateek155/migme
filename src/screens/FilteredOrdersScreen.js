@@ -447,6 +447,11 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   // Pagination state
   const [currentPage, setCurrentPage]   = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
+  const [firstVisibleDoc, setFirstVisibleDoc] = useState(null);
+  const [pageCursors, setPageCursors] = useState({});
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
 
   // Assign modal
   const [assignModalVisible, setAssignModalVisible] = useState(false);
@@ -456,7 +461,7 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   const isAllOrders = Array.isArray(statusFilter);
 
   // Derived pagination values
-  const totalItems  = filteredOrders.length;
+  const totalItems = totalCount || filteredOrders.length;
   const totalPages  = Math.max(1, Math.ceil(totalItems / itemsPerPage));
   const startIdx    = (currentPage - 1) * itemsPerPage;
   const pagedOrders = filteredOrders.slice(startIdx, startIdx + itemsPerPage);
