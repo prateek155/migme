@@ -632,6 +632,7 @@ export default function DashboardScreen({ clientId }) {
     ])
   );
     const unsubscribeOrders = onSnapshot(q, (snapshot) => {
+        console.log("Orders received:", snapshot.docs.length);
       const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => {
         const timeA = a.deliveryTime || '23:59';
