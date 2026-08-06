@@ -1,13 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Platform,
   TouchableOpacity, TextInput, ScrollView, Modal, Dimensions,  Animated 
 } from 'react-native';
-import {
-  collection, query, where, orderBy, limit, limitToLast,
-  startAfter, endBefore, getDocs, getCountFromServer,
-  onSnapshot, updateDoc, doc
-} from 'firebase/firestore';
+import { collection, onSnapshot, query, where, updateDoc, doc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../firebaseConfig';
 
@@ -48,7 +44,7 @@ const getDateHeaderLabel = (dateVal) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Expandable Order Row  (unchanged)
+// Expandable Order Row
 // ─────────────────────────────────────────────────────────────────────────────
 const ExpandableOrderRow = ({ item, onUpdateStatus, onAssign }) => {
   const [expanded, setExpanded]               = useState(false);
@@ -310,7 +306,7 @@ const ExpandableOrderRow = ({ item, onUpdateStatus, onAssign }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Date section header (used only in the "All Orders" grouped view) — unchanged
+// Date section header (used only in the "All Orders" grouped view)
 // ─────────────────────────────────────────────────────────────────────────────
 const DateSectionHeader = ({ label }) => (
   <View style={styles.dateHeaderRow}>
@@ -321,7 +317,7 @@ const DateSectionHeader = ({ label }) => (
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pagination Bar — unchanged UI, still driven by currentPage/totalItems/itemsPerPage
+// Pagination Bar
 // ─────────────────────────────────────────────────────────────────────────────
 const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange }) => {
   const [pageSizeDropdownVisible, setPageSizeDropdownVisible] = useState(false);
@@ -375,17 +371,17 @@ const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, on
       <Text style={styles.pageRangeText}>{startItem}–{endItem} of {totalItems}</Text>
 
       <View style={styles.pageNavRow}>
-        <NavBtn iconName="play-skip-back"    onPress={() => onPageChange('first')} disabled={currentPage === 1} />
-        <NavBtn iconName="chevron-back"      onPress={() => onPageChange('prev')}  disabled={currentPage === 1} />
-        <NavBtn iconName="chevron-forward"   onPress={() => onPageChange('next')}  disabled={currentPage === totalPages} />
-        <NavBtn iconName="play-skip-forward" onPress={() => onPageChange('last')}  disabled={currentPage === totalPages} />
+        <NavBtn iconName="play-skip-back"    onPress={() => onPageChange(1)}               disabled={currentPage === 1} />
+        <NavBtn iconName="chevron-back"      onPress={() => onPageChange(currentPage - 1)} disabled={currentPage === 1} />
+        <NavBtn iconName="chevron-forward"   onPress={() => onPageChange(currentPage + 1)} disabled={currentPage === totalPages} />
+        <NavBtn iconName="play-skip-forward" onPress={() => onPageChange(totalPages)}      disabled={currentPage === totalPages} />
       </View>
     </View>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Skeleton Loader — unchanged
+// Skeleton Loader
 // ─────────────────────────────────────────────────────────────────────────────
 const SkeletonRow = () => {
   const shimmer = React.useRef(new Animated.Value(0)).current;
@@ -439,49 +435,18 @@ const SkeletonLoader = () => (
 // `statusFilter` can be:
 //   - a single string, e.g. "Completed"  → behaves exactly as before
 //   - an array of strings, e.g. ["Completed", "Cancelled"] → "All Orders" mode:
-//     fetches every status in the array and groups rows by delivery date.
-//
-// READ-COST CHANGES vs the old version:
-//   1. No more onSnapshot on `orders` → uses getDocs (one-time read). The list
-//      no longer live-updates; use the Refresh button (or reopen the screen)
-//      to pull latest data. `executives` is left on onSnapshot since it's a
-//      small, low-churn collection — ping me if you want that changed too.
-//   2. Real Firestore-level pagination: only `itemsPerPage` docs are read per
-//      page (via `limit`), not the whole collection.
-//   3. Next/Prev/First/Last use Firestore cursors (`startAfter` / `endBefore`
-//      + `limitToLast`) so switching pages reads only the new page's docs,
-//      not everything before it.
-//
-// TRADE-OFFS this requires:
-//   - Search now filters only the currently-loaded page (can't search across
-//     pages you haven't fetched — that would defeat the read-savings).
-//   - The old "bill-printed-first" sort priority is dropped because Firestore
-//     cursor pagination needs a single orderBy it can index on. Sort is now
-//     orderBy(createdAt desc) for a single status, and
-//     orderBy(deliveryDate desc, createdAt desc) for "All Orders" mode.
-//     (If you want bill-printed-first back, store something like
-//     `billPrintedAt || 0` isn't enough — you'd need a dedicated indexed
-//     field written at status-update time; happy to wire that up.)
+//     fetches every status in the array and groups rows by delivery date,
+//     with the current date at the top and older dates continuing below.
 export default function FilteredOrdersScreen({ statusFilter, title, clientId }) {
-  const [pageDocs, setPageDocs]     = useState([]); // raw docs for the CURRENT page only
-  const [displayOrders, setDisplayOrders] = useState([]); // pageDocs filtered by search
-  const [executives, setExecutives] = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [orders, setOrders]                 = useState([]);
+  const [filteredOrders, setFilteredOrders] = useState([]);
+  const [executives, setExecutives]         = useState([]);
+  const [loading, setLoading]               = useState(true);
+  const [searchQuery, setSearchQuery]       = useState('');
 
   // Pagination state
   const [currentPage, setCurrentPage]   = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
-  const [totalCount, setTotalCount]     = useState(0);
-
-  // Cursor snapshots for the page currently on screen (used to fetch next/prev)
-  const cursorRef = useRef({ firstDoc: null, lastDoc: null });
-
-  // Session-level cache: pages already fetched are kept here so revisiting
-  // them (e.g. 15 → 14 → 15) costs ZERO extra Firestore reads. Cleared on
-  // refresh, on filter/clientId change, on itemsPerPage change, and on any
-  // status change that could shift page boundaries.
-  const pageCacheRef = useRef({}); // { [pageNumber]: { docs, firstDoc, lastDoc } }
 
   // Assign modal
   const [assignModalVisible, setAssignModalVisible] = useState(false);
@@ -490,22 +455,27 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
 
   const isAllOrders = Array.isArray(statusFilter);
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
+  // Derived pagination values
+  const totalItems  = filteredOrders.length;
+  const totalPages  = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+  const startIdx    = (currentPage - 1) * itemsPerPage;
+  const pagedOrders = filteredOrders.slice(startIdx, startIdx + itemsPerPage);
 
   // When in "All Orders" mode, attach date-section-header info to each row
+  // so the list reads: Today's orders → Yesterday's → the day before, etc.
   const displayData = isAllOrders
-    ? displayOrders.map((ord, idx) => {
+    ? pagedOrders.map((ord, idx) => {
         const currKey = getDateKey(ord.deliveryDate);
-        const prevKey = idx === 0 ? null : getDateKey(displayOrders[idx - 1].deliveryDate);
+        const prevKey = idx === 0 ? null : getDateKey(pagedOrders[idx - 1].deliveryDate);
         return {
           ...ord,
           _showDateHeader: currKey !== prevKey,
           _dateHeaderLabel: getDateHeaderLabel(ord.deliveryDate),
         };
       })
-    : displayOrders;
+    : pagedOrders;
 
-  // ── Fetch executives (kept realtime — small collection, low read cost) ──
+  // ── Fetch executives ──
   useEffect(() => {
     const unsubscribe = onSnapshot(
       query(collection(db, 'executives'), where('clientId', '==', clientId)),
@@ -515,162 +485,71 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
     return () => unsubscribe();
   }, [clientId]);
 
-  // Build the base (unpaginated) query for the current filter
-  const buildBaseQuery = useCallback(() => {
+  // ── Fetch orders ──
+  useEffect(() => {
     const statusArray = isAllOrders ? statusFilter : [statusFilter];
-    const constraints = [
+
+    const q = query(
       collection(db, 'orders'),
       where('clientId', '==', clientId),
-      where('status', 'in', statusArray),
-    ];
-    if (isAllOrders) {
-      constraints.push(orderBy('deliveryDate', 'desc'), orderBy('createdAt', 'desc'));
-    } else {
-      constraints.push(orderBy('createdAt', 'desc'));
-    }
-    return query(...constraints);
-  }, [isAllOrders, statusFilter, clientId]);
+      where('status', 'in', statusArray) // works for both a single status and multiple statuses
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  // Does this status belong on the current screen (given its filter)?
-  const matchesFilter = useCallback((status) => {
-    const statusArray = isAllOrders ? statusFilter : [statusFilter];
-    return statusArray.includes(status);
-  }, [isAllOrders, statusFilter]);
+       console.log("Orders Loaded :", list.length);
+       const counts = {};
+       list.forEach(order => {
+      counts[order.status] = (counts[order.status] || 0) + 1;
+      });
+      console.log("Status Counts :", counts);
 
-  const applySnapshotResult = (snapshot, pageNum) => {
-    const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    const firstDoc = snapshot.docs[0] || null;
-    const lastDoc = snapshot.docs[snapshot.docs.length - 1] || null;
-    setPageDocs(list);
-    cursorRef.current = { firstDoc, lastDoc };
-    if (pageNum) {
-      pageCacheRef.current[pageNum] = { docs: list, firstDoc, lastDoc };
-    }
-  };
+      if (isAllOrders) {
+        // "All Orders" view: group continuously by delivery date —
+        // current/most-recent date first, then older dates after it.
+        list.sort((a, b) => {
+          const aDateMs = toMillis(a.deliveryDate);
+          const bDateMs = toMillis(b.deliveryDate);
+          if (aDateMs !== bDateMs) return bDateMs - aDateMs; // newest date first
 
-  // If a cached page exists, use it directly — no Firestore read at all.
-  const useCachedPage = (pageNum) => {
-    const cached = pageCacheRef.current[pageNum];
-    if (!cached) return false;
-    setPageDocs(cached.docs);
-    cursorRef.current = { firstDoc: cached.firstDoc, lastDoc: cached.lastDoc };
-    setCurrentPage(pageNum);
-    return true;
-  };
-
-  // Fetch total count (1 cheap aggregation read) for pagination bar / last-page jump
-  const fetchTotalCount = useCallback(async () => {
-    try {
-      const testQuery = query(
-  collection(db, 'orders'),
-  where('clientId', '==', clientId)
-);
-
-const countSnap = await getCountFromServer(testQuery);
-console.log(countSnap.data());
-      setTotalCount(countSnap.data().count);
-    } catch (err) {
-      console.error('Count fetch failed:', err.message);
-    }
-  }, [buildBaseQuery]);
-
-  // Fetch page 1. Pass force=true (e.g. on Refresh) to bypass the cache.
-  const fetchFirstPage = useCallback(async (force = false) => {
-    if (!force && useCachedPage(1)) return;
-    setLoading(true);
-    try {
-      const q = query(buildBaseQuery(), limit(itemsPerPage));
-      const snap = await getDocs(q);
-      applySnapshotResult(snap, 1);
-      setCurrentPage(1);
-    } catch (err) {
-      console.error('Orders fetch failed:', err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildBaseQuery, itemsPerPage]);
-
-  const fetchNextPage = useCallback(async () => {
-    const targetPage = currentPage + 1;
-    if (useCachedPage(targetPage)) return; // already visited this page — no read
-    if (!cursorRef.current.lastDoc) return;
-    setLoading(true);
-    try {
-      const q = query(buildBaseQuery(), startAfter(cursorRef.current.lastDoc), limit(itemsPerPage));
-      const snap = await getDocs(q);
-      if (snap.empty) return; // already at last page
-      applySnapshotResult(snap, targetPage);
-      setCurrentPage(targetPage);
-    } catch (err) {
-      console.error('Next page fetch failed:', err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildBaseQuery, itemsPerPage, currentPage]);
-
-  const fetchPrevPage = useCallback(async () => {
-    if (currentPage <= 1) return;
-    const targetPage = currentPage - 1;
-    if (useCachedPage(targetPage)) return; // already visited this page — no read
-    if (!cursorRef.current.firstDoc) return;
-    setLoading(true);
-    try {
-      const q = query(buildBaseQuery(), endBefore(cursorRef.current.firstDoc), limitToLast(itemsPerPage));
-      const snap = await getDocs(q);
-      applySnapshotResult(snap, targetPage);
-      setCurrentPage(targetPage);
-    } catch (err) {
-      console.error('Prev page fetch failed:', err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildBaseQuery, itemsPerPage, currentPage]);
-
-  const fetchLastPage = useCallback(async () => {
-    setLoading(true);
-    try {
-      let count = totalCount;
-      if (!count) {
-        const countSnap = await getCountFromServer(buildBaseQuery());
-        count = countSnap.data().count;
-        setTotalCount(count);
+          // Same date → keep bill-printed-first, then most recent createdAt
+          const aPrinted = !!a.billPrintedAt;
+          const bPrinted = !!b.billPrintedAt;
+          if (aPrinted && !bPrinted) return -1;
+          if (!aPrinted && bPrinted) return 1;
+          if (aPrinted && bPrinted) return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
+          return toMillis(b.createdAt) - toMillis(a.createdAt);
+        });
+      } else {
+        // Original sort: bill-printed first (desc by printedAt), then by createdAt desc
+        list.sort((a, b) => {
+          const aPrinted = !!a.billPrintedAt;
+          const bPrinted = !!b.billPrintedAt;
+          if (aPrinted && !bPrinted) return -1;
+          if (!aPrinted && bPrinted) return 1;
+          if (aPrinted && bPrinted) return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
+          return toMillis(b.createdAt) - toMillis(a.createdAt);
+        });
       }
-      const pages = Math.max(1, Math.ceil(count / itemsPerPage));
-      if (useCachedPage(pages)) { setLoading(false); return; } // already visited — no read
-      const remainder = count - (pages - 1) * itemsPerPage || itemsPerPage;
-      const q = query(buildBaseQuery(), limitToLast(remainder));
-      const snap = await getDocs(q);
-      applySnapshotResult(snap, pages);
-      setCurrentPage(pages);
-    } catch (err) {
-      console.error('Last page fetch failed:', err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildBaseQuery, itemsPerPage, totalCount]);
 
-  // Initial load + whenever the filter/client changes → reset to page 1
-  useEffect(() => {
-    pageCacheRef.current = {}; // different filter = different pages, old cache invalid
-    fetchTotalCount();
-    fetchFirstPage(true);
+      setOrders(list);
+      setLoading(false);
+    }, (error) => {
+      console.error('Orders sync error:', error.message);
+      setLoading(false);
+    });
+    return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAllOrders ? JSON.stringify(statusFilter) : statusFilter, clientId]);
 
-  // itemsPerPage changed → page boundaries shift entirely, cache is stale
-  useEffect(() => {
-    pageCacheRef.current = {};
-    fetchFirstPage(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsPerPage]);
-
-  // Search filters only the currently loaded page (keeps reads down)
+  // ── Effect 1: Filter orders whenever orders list or search query changes ──
+  // ✅ Does NOT reset the page — so staying on page 2/3 is preserved
   useEffect(() => {
     if (!searchQuery.trim()) {
-      setDisplayOrders(pageDocs);
+      setFilteredOrders(orders);
     } else {
       const q = searchQuery.toLowerCase();
-      setDisplayOrders(pageDocs.filter(o =>
+      setFilteredOrders(orders.filter(o =>
         (o.orderNo || '').toString().toLowerCase().includes(q) ||
         (o.vendorName || '').toLowerCase().includes(q) ||
         (o.customerName || '').toLowerCase().includes(q) ||
@@ -678,33 +557,17 @@ console.log(countSnap.data());
         (o.assignedExecutiveName || '').toLowerCase().includes(q)
       ));
     }
-  }, [searchQuery, pageDocs]);
+  }, [searchQuery, orders]);
 
-  const handleRefresh = () => {
-    setSearchQuery('');
-    pageCacheRef.current = {};
-    fetchTotalCount();
-    fetchFirstPage(true);
-  };
+  // ── Effect 2: Reset to page 1 ONLY when the search query changes ──
+  // ✅ Firestore updates do NOT trigger this — page stays stable
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
 
   const handleUpdateStatus = async (order, newStatus) => {
     try {
       await updateDoc(doc(db, 'orders', order.id), { status: newStatus });
-
-      if (matchesFilter(newStatus)) {
-        // Still belongs on this screen — just patch the badge locally
-        setPageDocs(prev => prev.map(o => (o.id === order.id ? { ...o, status: newStatus } : o)));
-      } else {
-        // No longer belongs here (e.g. Completed → Cancelled) — drop it
-        // from view immediately instead of waiting for a manual refresh.
-        setPageDocs(prev => prev.filter(o => o.id !== order.id));
-        setTotalCount(c => Math.max(0, c - 1));
-        // Page boundaries everywhere may have shifted by one now — drop the
-        // whole cache so revisiting any page fetches fresh data instead of
-        // stale results. cursorRef stays untouched: it's still a valid
-        // Firestore cursor even though this doc no longer matches locally.
-        pageCacheRef.current = {};
-      }
     } catch (err) {
       console.error('Status update failed', err);
     }
@@ -723,9 +586,6 @@ console.log(countSnap.data());
         assignedExecutiveId: exec.id,
         assignedExecutiveName: exec.name,
       });
-      setPageDocs(prev => prev.map(o => (o.id === selectedOrder.id
-        ? { ...o, assignedExecutiveId: exec.id, assignedExecutiveName: exec.name }
-        : o)));
     } catch (err) {
       console.error('Assign executive failed', err);
     }
@@ -739,9 +599,6 @@ console.log(countSnap.data());
         assignedExecutiveId: null,
         assignedExecutiveName: null,
       });
-      setPageDocs(prev => prev.map(o => (o.id === selectedOrder.id
-        ? { ...o, assignedExecutiveId: null, assignedExecutiveName: null }
-        : o)));
     } catch (err) {
       console.error('Remove executive failed', err);
     }
@@ -749,14 +606,12 @@ console.log(countSnap.data());
   };
 
   const handleItemsPerPageChange = (size) => {
-    setItemsPerPage(size); // triggers the itemsPerPage effect → fetchFirstPage()
+    setItemsPerPage(size);
+    setCurrentPage(1);
   };
 
-  const handlePageChange = (direction) => {
-    if (direction === 'first') fetchFirstPage();
-    else if (direction === 'prev') fetchPrevPage();
-    else if (direction === 'next') fetchNextPage();
-    else if (direction === 'last') fetchLastPage();
+  const handlePageChange = (page) => {
+    setCurrentPage(Math.min(Math.max(1, page), totalPages));
   };
 
   const statusLabelLower = isAllOrders ? '' : String(statusFilter).toLowerCase();
@@ -776,32 +631,26 @@ console.log(countSnap.data());
                   statusFilter === 'Cancelled' ? '#dc2626' : '#f59e0b',
             }]} />
             <Text style={styles.subHeading}>
-              {loading ? '…' : `${totalCount} ${totalCount === 1 ? 'order' : 'orders'} found`}
+              {loading ? '…' : `${filteredOrders.length} ${filteredOrders.length === 1 ? 'order' : 'orders'} found`}
             </Text>
           </View>
         </View>
 
         {!loading && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <View style={styles.searchBar}>
-              <Ionicons name="search" size={16} color="#94a3b8" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search this page…"
-                placeholderTextColor="#94a3b8"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-              {searchQuery ? (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Ionicons name="close-circle" size={16} color="#94a3b8" />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            <TouchableOpacity style={styles.refreshBtn} onPress={handleRefresh}>
-              <Ionicons name="refresh" size={16} color="#0f172a" />
-            </TouchableOpacity>
+          <View style={styles.searchBar}>
+            <Ionicons name="search" size={16} color="#94a3b8" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search by order, vendor, train…"
+              placeholderTextColor="#94a3b8"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery ? (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={16} color="#94a3b8" />
+              </TouchableOpacity>
+            ) : null}
           </View>
         )}
       </View>
@@ -823,11 +672,11 @@ console.log(countSnap.data());
 
          {loading ? (
            <SkeletonLoader />
-          ) : displayOrders.length === 0 ? (
+          ) : filteredOrders.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
             <Text style={styles.emptyStateText}>
-              {searchQuery ? 'No orders match your search on this page' : `No ${statusLabelLower} orders`}
+              {searchQuery ? 'No orders match your search' : `No ${statusLabelLower} orders`}
             </Text>
           </View>
         ) : (
@@ -857,7 +706,7 @@ console.log(countSnap.data());
             {/* ── Pagination bar ── */}
             <PaginationBar
               currentPage={currentPage}
-              totalItems={totalCount}
+              totalItems={totalItems}
               itemsPerPage={itemsPerPage}
               onPageChange={handlePageChange}
               onItemsPerPageChange={handleItemsPerPageChange}
@@ -981,12 +830,6 @@ const styles = StyleSheet.create({
     minWidth: 280, gap: 8,
   },
   searchInput: { flex: 1, fontSize: 13, color: '#0f172a', outlineStyle: 'none' },
-
-  refreshBtn: {
-    width: 38, height: 38, borderRadius: 8,
-    borderWidth: 1, borderColor: '#e2e8f0',
-    backgroundColor: 'white', justifyContent: 'center', alignItems: 'center',
-  },
 
   tableContainer: {
     flex: 1, backgroundColor: 'white',
