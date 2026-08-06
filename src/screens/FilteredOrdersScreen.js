@@ -561,7 +561,13 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   // Fetch total count (1 cheap aggregation read) for pagination bar / last-page jump
   const fetchTotalCount = useCallback(async () => {
     try {
-      const countSnap = await getCountFromServer(buildBaseQuery());
+      const testQuery = query(
+  collection(db, 'orders'),
+  where('clientId', '==', clientId)
+);
+
+const countSnap = await getCountFromServer(testQuery);
+console.log(countSnap.data());
       setTotalCount(countSnap.data().count);
     } catch (err) {
       console.error('Count fetch failed:', err.message);
