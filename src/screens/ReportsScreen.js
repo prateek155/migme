@@ -761,6 +761,7 @@ export default function ReportsScreen({ clientId }) {
     if (!clientId) return;
     const q = query(collection(db, 'orders'), where('clientId', '==', clientId));
     const unsub = onSnapshot(q, snap => {
+      console.log("Reports Orders received:", snap.docs.length);
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       data.sort((a, b) => parseDate(b.deliveryDate) - parseDate(a.deliveryDate));
       setOrders(data);
