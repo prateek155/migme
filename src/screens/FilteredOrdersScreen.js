@@ -497,6 +497,13 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
+       console.log("Orders Loaded :", list.length);
+       const counts = {};
+       list.forEach(order => {
+      counts[order.status] = (counts[order.status] || 0) + 1;
+      });
+      console.log("Status Counts :", counts);
+
       if (isAllOrders) {
         // "All Orders" view: group continuously by delivery date —
         // current/most-recent date first, then older dates after it.
