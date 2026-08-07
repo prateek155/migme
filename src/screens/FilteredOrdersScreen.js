@@ -517,8 +517,35 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
 
       console.log("Status Counts:", counts);
 
-      // ⚠️ Iske niche tumhara existing sort code
-      // bilkul same rahega
+      if (isAllOrders) {
+  list.sort((a, b) => {
+    const aDateMs = toMillis(a.deliveryDate);
+    const bDateMs = toMillis(b.deliveryDate);
+
+    if (aDateMs !== bDateMs) return bDateMs - aDateMs;
+
+    const aPrinted = !!a.billPrintedAt;
+    const bPrinted = !!b.billPrintedAt;
+
+    if (aPrinted && !bPrinted) return -1;
+    if (!aPrinted && bPrinted) return 1;
+
+    if (aPrinted && bPrinted) {
+      return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
+    }
+
+    return toMillis(b.createdAt) - toMillis(a.createdAt);
+  });
+} else {
+  list.sort((a, b) => {
+    const aDateMs = toMillis(a.deliveryDate);
+    const bDateMs = toMillis(b.deliveryDate);
+
+    if (aDateMs !== bDateMs) return bDateMs - aDateMs;
+
+    return toMillis(b.createdAt) - toMillis(a.createdAt);
+  });
+}
 
       setOrders(list);
       setLoading(false);
