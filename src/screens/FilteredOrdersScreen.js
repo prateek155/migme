@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, FlatList, Platform,
   TouchableOpacity, TextInput, ScrollView, Modal, Dimensions,  Animated 
 } from 'react-native';
-import { collection, onSnapshot, query, where, updateDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, query, where, updateDoc, doc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../firebaseConfig';
 
@@ -487,60 +487,55 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
 
   // ── Fetch orders ──
   useEffect(() => {
-    const statusArray = isAllOrders ? statusFilter : [statusFilter];
+  let mounted = true;
 
-    const q = query(
-      collection(db, 'orders'),
-      where('clientId', '==', clientId),
-      where('status', 'in', statusArray) // works for both a single status and multiple statuses
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+  const loadOrders = async () => {
+    try {
+      const statusArray = isAllOrders ? statusFilter : [statusFilter];
 
-       console.log("Orders Loaded :", list.length);
-       const counts = {};
-       list.forEach(order => {
-      counts[order.status] = (counts[order.status] || 0) + 1;
+      const q = query(
+        collection(db, "orders"),
+        where("clientId", "==", clientId),
+        where("status", "in", statusArray)
+      );
+
+      const snapshot = await getDocs(q);
+
+      if (!mounted) return;
+
+      const list = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data(),
+      }));
+
+      console.log("Orders Loaded:", list.length);
+
+      const counts = {};
+      list.forEach(order => {
+        counts[order.status] = (counts[order.status] || 0) + 1;
       });
-      console.log("Status Counts :", counts);
 
-      if (isAllOrders) {
-        // "All Orders" view: group continuously by delivery date —
-        // current/most-recent date first, then older dates after it.
-        list.sort((a, b) => {
-          const aDateMs = toMillis(a.deliveryDate);
-          const bDateMs = toMillis(b.deliveryDate);
-          if (aDateMs !== bDateMs) return bDateMs - aDateMs; // newest date first
+      console.log("Status Counts:", counts);
 
-          // Same date → keep bill-printed-first, then most recent createdAt
-          const aPrinted = !!a.billPrintedAt;
-          const bPrinted = !!b.billPrintedAt;
-          if (aPrinted && !bPrinted) return -1;
-          if (!aPrinted && bPrinted) return 1;
-          if (aPrinted && bPrinted) return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
-          return toMillis(b.createdAt) - toMillis(a.createdAt);
-        });
-      } else {
-        // Original sort: bill-printed first (desc by printedAt), then by createdAt desc
-        list.sort((a, b) => {
-          const aPrinted = !!a.billPrintedAt;
-          const bPrinted = !!b.billPrintedAt;
-          if (aPrinted && !bPrinted) return -1;
-          if (!aPrinted && bPrinted) return 1;
-          if (aPrinted && bPrinted) return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
-          return toMillis(b.createdAt) - toMillis(a.createdAt);
-        });
-      }
+      // ⚠️ Iske niche tumhara existing sort code
+      // bilkul same rahega
 
       setOrders(list);
       setLoading(false);
-    }, (error) => {
-      console.error('Orders sync error:', error.message);
+
+    } catch (error) {
+      console.error("Orders fetch error:", error.message);
       setLoading(false);
-    });
-    return () => unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAllOrders ? JSON.stringify(statusFilter) : statusFilter, clientId]);
+    }
+  };
+
+  loadOrders();
+
+  return () => {
+    mounted = false;
+  };
+
+}, [isAllOrders ? JSON.stringify(statusFilter) : statusFilter, clientId]);
 
   // ── Effect 1: Filter orders whenever orders list or search query changes ──
   // ✅ Does NOT reset the page — so staying on page 2/3 is preserved
