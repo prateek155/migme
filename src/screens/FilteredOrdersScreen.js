@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, FlatList, Platform,
   TouchableOpacity, TextInput, ScrollView, Modal, Dimensions,  Animated 
 } from 'react-native';
-import { collection, getDocs, query, where, updateDoc, doc } from 'firebase/firestore';
+import { collection, getDocs,   onSnapshot, query, where, updateDoc, doc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../firebaseConfig';
 
