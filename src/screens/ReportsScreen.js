@@ -757,23 +757,85 @@ export default function ReportsScreen({ clientId }) {
   const PERIOD_OPTS = ['Today','Week','Month','Custom'];
   const STATUS_OPTS = ['All','Completed','Cancelled'];
 
-  useEffect(() => {
-    if (!clientId) return;
-    const q = query( collection(db, "orders"), where("clientId", "==", clientId), where("status", "in", ["Completed", "Cancelled"]) );
-    const unsub = onSnapshot(q, snap => {
-      console.log("Reports Orders received:", snap.docs.length);
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      data.sort((a, b) => parseDate(b.deliveryDate) - parseDate(a.deliveryDate));
-      setOrders(data);
-      applyFilter(data, 'Today', new Date(), new Date());
-      setLoading(false);
-    });
-    return unsub;
-  }, []);
+  const fetchReportOrders = (type, fromDate = startDate, toDate = endDate) => {
+  if (!clientId) return () => {};
 
-  useEffect(() => {
-    if (filterType === 'Custom' && orders.length) applyFilter(orders, 'Custom', startDate, endDate);
-  }, [startDate, endDate]);
+  let start = new Date();
+  let end = new Date();
+
+  if (type === "Today") {
+    start = new Date();
+    end = new Date();
+  }
+
+  else if (type === "Week") {
+    end = new Date();
+    start = new Date();
+    start.setDate(end.getDate() - 6);
+  }
+
+  else if (type === "Month") {
+    end = new Date();
+    start = new Date(end.getFullYear(), end.getMonth(), 1);
+  }
+
+  else if (type === "Custom") {
+    start = fromDate;
+    end = toDate;
+  }
+
+  const q = query(
+    collection(db, "orders"),
+    where("clientId", "==", clientId),
+    where("status", "in", ["Completed", "Cancelled"]),
+    where("deliveryDate", ">=", toISOLocal(start)),
+    where("deliveryDate", "<=", toISOLocal(end))
+  );
+
+  return onSnapshot(q, (snap) => {
+
+    const data = snap.docs.map(d => ({
+      id: d.id,
+      ...d.data(),
+    }));
+
+    data.sort((a, b) => parseDate(b.deliveryDate) - parseDate(a.deliveryDate));
+
+    console.log("=================================");
+    console.log("Report :", type);
+    console.log("Range :", toISOLocal(start), "→", toISOLocal(end));
+    console.log("Orders Loaded :", data.length);
+
+    const counts = {};
+
+    data.forEach(order => {
+      counts[order.status] = (counts[order.status] || 0) + 1;
+    });
+
+    console.log("Status Counts :", counts);
+    console.log("=================================");
+
+    setOrders(data);
+    setFiltered(data);
+    setLoading(false);
+
+  });
+};
+
+useEffect(() => {
+  setLoading(true);
+
+  const unsubscribe = fetchReportOrders(
+    filterType,
+    startDate,
+    endDate
+  );
+
+  return () => {
+    if (unsubscribe) unsubscribe();
+  };
+
+}, [clientId, filterType, startDate, endDate]);
 
   const applyFilter = (data, type, sd, ed) => {
     const today = clearTime(new Date());
@@ -797,10 +859,9 @@ export default function ReportsScreen({ clientId }) {
   };
 
   const handlePeriod = (type) => {
-    setPeriodDrop(false);
-    if (type !== 'Custom') applyFilter(orders, type, startDate, endDate);
-    else setFilterType('Custom');
-  };
+  setPeriodDrop(false);
+  setFilterType(type);
+};
 
   const displayOrders = filtered.filter(o => {
     const q = search.toLowerCase();
@@ -1096,12 +1157,12 @@ export default function ReportsScreen({ clientId }) {
             <Text style={styles.dateLbl}>From:</Text>
             {Platform.OS === 'web' ? (
               <input type="date" value={toISOLocal(startDate)}
-                onChange={e => { if (e.target.value) { const [y,m,d] = e.target.value.split('-').map(Number); const nd = new Date(y,m-1,d); setStart(nd); applyFilter(orders,'Custom',nd,endDate); }}}
+                onChange={e => { if (e.target.value) { const [y,m,d] = e.target.value.split('-').map(Number); const nd = new Date(y,m-1,d); setStart(nd); setFilterType("Custom"); }}}
                 style={{ border:'none',outline:'none',fontSize:12,color:'#1d4ed8',fontWeight:'600',backgroundColor:'transparent',cursor:'pointer' }} />
             ) : (
               <>
                 <TouchableOpacity onPress={() => { setShowStart(true); setShowEnd(false); }}><Text style={styles.dateVal}>{fmtDate(startDate)}</Text></TouchableOpacity>
-                {showStart && <DateTimePicker value={startDate} mode="date" onChange={(_, d) => { if (d) { setStart(d); applyFilter(orders,'Custom',d,endDate); } setShowStart(false); }} />}
+                {showStart && <DateTimePicker value={startDate} mode="date" onChange={(_, d) => { if (d) { setStart(d); setFilterType("Custom"); } setShowStart(false); }} />}
               </>
             )}
           </View>
@@ -1111,12 +1172,12 @@ export default function ReportsScreen({ clientId }) {
             <Text style={styles.dateLbl}>To:</Text>
             {Platform.OS === 'web' ? (
               <input type="date" value={toISOLocal(endDate)}
-                onChange={e => { if (e.target.value) { const [y,m,d] = e.target.value.split('-').map(Number); const nd = new Date(y,m-1,d); setEnd(nd); applyFilter(orders,'Custom',startDate,nd); }}}
+                onChange={e => { if (e.target.value) { const [y,m,d] = e.target.value.split('-').map(Number); const nd = new Date(y,m-1,d); setEnd(nd); setFilterType("Custom"); }}}
                 style={{ border:'none',outline:'none',fontSize:12,color:'#1d4ed8',fontWeight:'600',backgroundColor:'transparent',cursor:'pointer' }} />
             ) : (
               <>
                 <TouchableOpacity onPress={() => { setShowEnd(true); setShowStart(false); }}><Text style={styles.dateVal}>{fmtDate(endDate)}</Text></TouchableOpacity>
-                {showEnd && <DateTimePicker value={endDate} mode="date" onChange={(_, d) => { if (d) { setEnd(d); applyFilter(orders,'Custom',startDate,d); } setShowEnd(false); }} />}
+                {showEnd && <DateTimePicker value={endDate} mode="date" onChange={(_, d) => { if (d) { setEnd(d); setFilterType("Custom"); } setShowEnd(false); }} />}
               </>
             )}
           </View>
