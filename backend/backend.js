@@ -1913,6 +1913,73 @@ function buildChangePayload(existingOrder, updateResult) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// FCM — NEW ORDER PUSH NOTIFICATION
+// ═══════════════════════════════════════════════════════════════════════════
+// Reads every FCM token the client app registered under
+// `clients/<clientId>/fcmTokens/*` (doc ID == token) and pushes a "new
+// order" alert. Only called when a genuinely NEW order is created — existing
+// / updated orders never trigger a push.
+async function sendNewOrderPush(clientId, orderData, tag) {
+  let tokens = [];
+  try {
+    const snap = await getDocs(
+      collection(db, "clients", clientId, "fcmTokens"),
+    );
+    tokens = snap.docs.map((d) => d.id).filter((t) => t && t.length > 20);
+  } catch (e) {
+    warn(
+      `${tag} FCM token read failed for ${clientId} (no tokens yet?) — ${e.message}`,
+    );
+    return;
+  }
+  if (tokens.length === 0) return;
+
+  try {
+    const title = "🛎 New Order";
+    const body = `${orderData.orderNo || ""} · ${orderData.customerName || ""} · ₹${orderData.totalAmount || 0}`;
+    if (typeof admin.messaging === "function") {
+      const res = await admin
+        .messaging()
+        .sendEachForMulticast({
+          tokens,
+          notification: { title, body },
+          data: {
+            type: "new_order",
+            orderNo: String(orderData.orderNo || ""),
+            clientId,
+          },
+        });
+      const failedTokens = [];
+      res.responses.forEach((r, i) => {
+        if (r.success) return;
+        if (
+          r.error &&
+          [
+            "messaging/registration-token-not-registered",
+            "messaging/invalid-registration-token",
+          ].includes(r.error.code)
+        ) {
+          failedTokens.push(res.responses[i].originalToken || tokens[i]);
+        }
+      });
+      // cleanup stale tokens so dead devices stop getting billed
+      for (const tok of failedTokens) {
+        try {
+          await deleteDoc(doc(db, "clients", clientId, "fcmTokens", tok));
+        } catch (_) {}
+      }
+      log(
+        `${tag} 🔔 FCM sent to ${res.successCount}/${tokens.length} device(s) for #${orderData.orderNo}`,
+      );
+    } else {
+      warn(`${tag} FCM skipping — admin.messaging() unavailable`);
+    }
+  } catch (e) {
+    warn(`${tag} FCM push failed for #${orderData.orderNo}: ${e.message}`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // EMAIL PROCESSOR
 // ═══════════════════════════════════════════════════════════════════════════
 async function processEmail(
@@ -2383,6 +2450,9 @@ async function processEmail(
         );
         orderMap.set(orderDocId(clientId, finalOrderNo), newDoc);
         log(`${tag}    ✅ SAVED #${finalOrderNo} | ₹${orderData.totalAmount}`);
+
+        // 🔔 Notify the client's registered devices about the NEW order
+        sendNewOrderPush(clientId, newDoc, tag).catch(() => {});
 
         sessionUIDCache.add(uid);
         await recordProcessedEmail(uidStr, finalOrderNo, "success", clientId);
