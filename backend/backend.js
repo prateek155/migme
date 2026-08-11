@@ -1920,6 +1920,15 @@ function buildChangePayload(existingOrder, updateResult) {
 // order" alert. Only called when a genuinely NEW order is created — existing
 // / updated orders never trigger a push.
 async function sendNewOrderPush(clientId, orderData, tag) {
+  try {
+    const clientSnap = await getDoc(doc(db, "clients", clientId));
+    if (clientSnap.exists() && clientSnap.data().notificationsEnabled === false) {
+      log(`${tag} Push skipped — client ${clientId} has notifications off`);
+      return;
+    }
+  } catch (e) {
+    warn(`${tag} Could not read notifications flag for ${clientId}: ${e.message}`);
+  }
   let tokens = [];
   try {
     const snap = await getDocs(
