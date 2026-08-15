@@ -1,52 +1,263 @@
-"use strict";
+'use strict';
 
 /**
- * VENDOR: RAJDHANI (Garg Rajdhani Online Food)
- * Sender: rajdhaniorder.com / rajdhani domains
- * Email type: Pure HTML
+ * VENDOR: RAJDHANI ONLINE FOOD (Garg Rajdhani Online Food)
+ * Sender         : Rajdhani Online Food <rajdhaniorder@gmail.com>
+ * Content-Type   : text/html (pure HTML, no PDF attachment — the "PDF" the
+ *                  vendor sees is just a browser print of this same HTML)
+ * Row structure  : standard 3-cell rows — <td>Label</td><td>:</td><td>Value</td>
+ *                  (NOT self-contained like RailFood's "Label : <b>Value</b>"
+ *                  one-td rows — do NOT set selfContained:true here.)
+ *
+ * ── CONFIRMED STRUCTURAL GOTCHAS (verified from live .eml source, 2026-08-15) ─
+ *
+ * GOTCHA 1 — Coach/Berth value cell is a <th>, not a <td>:
+ *   <tr>
+ *     <td class="border-top"><strong>Coach / Bearth</strong></td>
+ *     <td class="border-top">:</td>
+ *     <th class="border-top">S2/2</th>          <!-- <th>, not <td> !! -->
+ *   </tr>
+ *   If parseDomOrder's sibling-value lookup only queries `td`, this field
+ *   WILL come back null. Selector must include `th` as well (e.g. 'td,th'),
+ *   OR this needs a dedicated selfContained/custom lookup for this one row.
+ *   VERIFY before relying on `coach` for this vendor.
+ *
+ * GOTCHA 2 — the ENTIRE items table uses <th> cells, not <td>:
+ *   <tr><th colspan="2">1</th><th>Roasted Papad</th></tr>
+ *   <tr><th colspan="2">1</th><th>Veg Fried Rice & Chilli Paneer Combo</th></tr>
+ *   Header row above it ("Quantity" / "Item Name") IS normal <td>, only the
+ *   data rows are <th>. If the items-table parser only walks `td` cells per
+ *   row, it will return ZERO items for every Rajdhani order. Same fix as
+ *   GOTCHA 1 — items-row cell selector must accept `th` too.
+ *
+ * GOTCHA 3 — ambiguous label matching risk ("contains" vs exact):
+ *   Row order in the DOM is: "Order" (order no) ... "IRCTC Order ID" ...
+ *   later ... "Total Amount" ... "Delivery Charges" ... "Discount / Pre-Payment"
+ *   ... "Other Charges" ... "Amount" (final, post-adjustment) ... "Payment Mode".
+ *   "IRCTC Order ID" CONTAINS the substring "Order", and "Total Amount"
+ *   CONTAINS the substring "Amount". If parseDomOrder does a `.includes()`
+ *   style label match instead of an exact trimmed-text match, a labelText of
+ *   "Order" could resolve fine (its td happens to come first), but "Amount"
+ *   is genuinely dangerous — "Total Amount" appears in the DOM BEFORE the
+ *   final "Amount" row and would be matched instead, silently giving the
+ *   PRE-adjustment figure instead of the final payable amount.
+ *   FIX: this rule deliberately avoids using "Amount" as a labelText at all.
+ *   Instead it reads the four unambiguous fields (Total Amount, Delivery
+ *   Charges, Discount / Pre-Payment, Other Charges — none of these strings
+ *   are substrings of each other) and computes totalAmount in postProcess.
+ *   This produces the same final number without depending on ambiguous
+ *   label matching. If you later confirm parseDomOrder does EXACT label
+ *   matching (not "contains"), you can simplify by reading "Amount" directly.
+ *
+ * ── TESTING: extra sender whitelisted (TEMPORARY) ─────────────────────────
+ * Per request: 1972vragrawal@gmail.com (the personal inbox this vendor's
+ * emails were forwarded from/to) is added as an EXTRA matcher below so test
+ * sends from that address get parsed with this same Rajdhani rule.
+ * >>> REMOVE the matcher entry tagged "TEMP TEST SENDER" once testing is
+ *     done — it is a single line, safe to delete on its own. <<<
  */
 
+const domConfig = {
+
+  fields: {
+    // GOTCHA 3: "Order" row is first in the DOM, before "IRCTC Order ID"
+    // (which also contains the substring "Order") — first-match should be
+    // safe, but verify if your engine matches last-occurrence instead.
+    orderNo: {
+      labelText: 'Order',
+      transform: v => v.trim().replace(/^#/, ''),
+    },
+
+    irctcOrderId: {
+      labelText: 'IRCTC Order ID',
+      transform: v => v.trim(),
+    },
+
+    customerName: {
+      labelText: 'Customer Name',
+      transform: v => v.trim(),
+    },
+
+    contactNo: {
+      labelText: 'Mobile No',
+      transform: v => {
+        const raw = v.trim();
+        const match = raw.match(/(?:^|[^\d])([6-9]\d{9})(?:[^\d]|$)/);
+        if (match) return match[1];
+        const digits = raw.replace(/\D/g, '');
+        if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+        if (digits.length === 10) return digits;
+        return raw;
+      },
+    },
+
+    trainInfo: {
+      labelText: 'Train No / Name',
+      transform: v => v.trim(),
+    },
+
+    // Raw "13-08-2026" — always DD-MM-YYYY for this vendor (single format,
+    // unlike RailFood's two competing formats). Converted in postProcess.
+    _deliveryDateRaw: {
+      labelText: 'Delivery Date',
+      transform: v => v.trim(),
+    },
+
+    // Raw "23:28:00" (HH:mm:ss) — trimmed to HH:mm in postProcess.
+    _etaRaw: {
+      labelText: 'ETA',
+      transform: v => v.trim(),
+    },
+
+    station: {
+      labelText: 'Station',
+      transform: v => v.trim(),
+    },
+
+    // GOTCHA 1: value cell is a <th>, not a <td> — verify sibling-value
+    // lookup selector covers both tag types for this row.
+    coach: {
+      labelText: 'Coach / Bearth',
+      transform: v => v.trim(),
+    },
+
+    // Unambiguous, non-overlapping labels used to COMPUTE totalAmount below
+    // (see GOTCHA 3) instead of trusting a bare "Amount" label match.
+    _totalAmountRaw: {
+      labelText: 'Total Amount',
+      transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
+    },
+
+    deliveryCharge: {
+      labelText: 'Delivery Charges',
+      transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
+    },
+
+    // "0 / 0" → "Discount / Pre-Payment". Split into two numbers.
+    _discountRaw: {
+      labelText: 'Discount / Pre-Payment',
+      transform: v => v.trim(),
+    },
+
+    otherCharges: {
+      labelText: 'Other Charges',
+      transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
+    },
+
+    paymentType: {
+      labelText: 'Payment Mode',
+      transform: v => {
+        const u = v.trim().toUpperCase();
+        if (u === 'COD' || u === 'CASH' || u === 'CASH_ON_DELIVERY') return 'COD';
+        if (['ONLINE', 'PAID', 'PRE_PAID', 'PREPAID'].includes(u)) return 'Prepaid';
+        return u;
+      },
+    },
+
+    remark: {
+      labelText: 'Remarks',
+      transform: v => {
+        const t = v.trim();
+        return (!t || t.toUpperCase() === 'N/A') ? null : t;
+      },
+    },
+  },
+
+  itemsTable: {
+    // GOTCHA 2: data rows are <th>, header row is <td> — selector for row
+    // cells must accept both, or every order will come back with 0 items.
+    columnMap: {
+      'quantity':  'qty',
+      'item name': 'rawItem',
+    },
+
+    // No per-item price column for this vendor — only order-level totals.
+    itemCellSplit: null,
+
+    footerLabels: [
+      'Total Amount',
+      'Delivery Charges',
+      'Discount / Pre-Payment',
+      'Other Charges',
+      'Amount',
+      'Payment Mode',
+      'Remarks',
+    ],
+  },
+
+  postProcess(order) {
+    // ── Delivery date: DD-MM-YYYY → YYYY-MM-DD (single fixed format) ──────
+    const dateRaw = order._deliveryDateRaw || '';
+    const dm = dateRaw.match(/(\d{1,2})-(\d{1,2})-(\d{4})/);
+    order.deliveryDate = dm
+      ? `${dm[3]}-${dm[2].padStart(2, '0')}-${dm[1].padStart(2, '0')}`
+      : null;
+    delete order._deliveryDateRaw;
+
+    // ── ETA "23:28:00" → deliveryTime "23:28" ─────────────────────────────
+    const etaRaw = order._etaRaw || '';
+    const tm = etaRaw.match(/(\d{1,2}):(\d{2})/);
+    order.deliveryTime = tm ? `${tm[1].padStart(2, '0')}:${tm[2]}` : null;
+    delete order._etaRaw;
+
+    // ── Discount / Pre-Payment "0 / 0" → discount, prePayment ─────────────
+    const discRaw = order._discountRaw || '';
+    const dparts = discRaw.split('/').map(s => parseFloat(s.trim().replace(/[^\d.]/g, '')) || 0);
+    order.discount = dparts[0] || 0;
+    order.prePayment = dparts[1] || 0;
+    delete order._discountRaw;
+
+    // ── GOTCHA 3 fix: compute final totalAmount from unambiguous fields ──
+    // final Amount = Total Amount + Delivery Charges + Other Charges - Discount
+    // (Confirmed correct on the sample order: 217 + 0 + 0 - 0 = 217, which
+    // matches the vendor's own "Amount" row. Re-verify against a second
+    // sample order that actually HAS a non-zero discount/charge before
+    // trusting this in production.)
+    const base = order._totalAmountRaw || 0;
+    order.totalAmount = base + (order.deliveryCharge || 0) + (order.otherCharges || 0) - (order.discount || 0);
+    delete order._totalAmountRaw;
+
+    return order;
+  },
+};
+
 const matchers = [
-  { match: "rajdhaniorder", name: "Rajdhani", type: "rajdhani" },
-  { match: "rajdhani", name: "Rajdhani", type: "rajdhani" },
+  { match: 'rajdhaniorder@gmail.com', name: 'Rajdhani Online Food', type: 'rajdhani' },
+  { match: 'rajdhani',                name: 'Rajdhani Online Food', type: 'rajdhani' },
+
+  // >>> TEMP TEST SENDER — remove this single entry once testing is done <<<
+  { match: '1972vragrawal@gmail.com', name: 'Rajdhani Online Food', type: 'rajdhani' },
 ];
 
-const type = "rajdhani";
+const type = 'rajdhani';
 
-const rule = `VENDOR: RAJDHANI
-ORDER NO: Field label is "IRCTC Order ID" — value is a plain integer like "2451272001". Use this as orderNo.
-  There is also an "Order" field showing "#322241" — this is the vendor's own ref, do NOT use it as orderNo.
+const rule = `VENDOR: RAJDHANI ONLINE FOOD (Garg Rajdhani Online Food)
+EMAIL FORMAT: Pure HTML, standard 3-cell rows: Label | ":" | Value.
 
-EMAIL FORMAT: Pure HTML. After HTML-to-text, each field row appears as 3 pipe-separated columns:
-  Label | : | Value
-  e.g. " IRCTC Order ID | : | 2451272001 |"
-  The VALUE is always the 3rd column (after the colon column).
+ORDER NO: "Order : #324182" → strip leading "#" → orderNo = "324182".
+  Do NOT confuse with the later "IRCTC Order ID" row — that is a separate field.
 
-ORDER FIELDS:
-  IRCTC Order ID  | : | 2451272001       ← orderNo
-  Customer Name   | : | Jayesh           ← customerName
-  Mobile No       | : | 9323009200       ← contactNo (use "Mobile No", not "Alt. Mobile No")
-  Train No / Name | : | 22210/MMCT DURONTO ← trainInfo
-  Delivery Date   | : | 31-05-2026       ← deliveryDate (DD-MM-YYYY → YYYY-MM-DD)
-  ETA             | : | 10:33:00         ← deliveryTime (take first HH:MM, drop seconds)
-  Coach / Bearth  | : | M1/49            ← coach (already combined, capture as-is)
-  Payment Mode    | : | Cash on Delivery ← paymentType
-  Remarks         | : | N/A              ← remark (ignore if "N/A")
-  Balance Amount  | : | 500              ← totalAmount (this is what to collect after discount)
+ITEMS TABLE: header row is "Quantity | Item Name" (no price column).
+  Data rows render as <th> cells, not <td> — parser must accept both tags or
+  it will return zero items for this vendor.
+  e.g. "1 | Roasted Papad", "1 | Veg Fried Rice & Chilli Paneer Combo".
 
-ITEMS TABLE — Quantity column is FIRST, then Item Name:
-  Quantity | Item Name
-  4        | Extra Pav
-  4        | Pav Bhaji
-  → qty=4, name="Extra Pav" and qty=4, name="Pav Bhaji"
-  No price per item is given — set each item price=0.
+TOTAL AMOUNT: do NOT trust a bare "Amount" label — "Total Amount" (an earlier,
+  PRE-adjustment row) also contains the substring "Amount" and can be matched
+  by mistake. Instead compute:
+    totalAmount = "Total Amount" + "Delivery Charges" + "Other Charges" - "Discount / Pre-Payment" (first number)
+  e.g. Total Amount=217, Delivery Charges=0, Other Charges=0, Discount=0 → totalAmount=217.
 
-- DATE: "Delivery Date" field is DD-MM-YYYY → YYYY-MM-DD.
-- TIME: "ETA" field is HH:MM:SS → extract only HH:MM (drop seconds).
-- COACH: "Coach / Bearth" (note: spelled "Bearth" not "Berth"). Value already combined e.g. "M1/49".
-- PAYMENT: "Payment Mode" field. "Cash on Delivery"→"COD".
-- TOTAL: "Balance Amount" field — this is after any discount, the actual amount to collect.
-  Do NOT use "Total Amount" (that is pre-discount).
-- REMARK: "Remarks" field — ignore if value is "N/A".`;
+- COACH/BERTH: "Coach / Bearth" field e.g. "S2/2" — value cell is a <th>, not <td>.
+- DATE: "Delivery Date" is always DD-MM-YYYY (single format, unlike RailFood) e.g. "13-08-2026" → 2026-08-13.
+- ETA: "ETA" is HH:mm:ss e.g. "23:28:00" → use as deliveryTime, trim to HH:mm.
+- STATION: "Station" e.g. "VADODARA JN".
+- TRAIN: "Train No / Name" e.g. "22955/KUTCH EXPRESS".
+- CONTACT: "Mobile No" — first 10-digit number, strip +91/91 prefix.
+- PAYMENT: "Payment Mode" — "Online"/"Paid"/"Pre_Paid"/"Prepaid" → "Prepaid"; "COD"/"Cash" → "COD".
+- REMARKS: "Remarks" — "N/A" → null.
+- SENDER: real vendor sends from rajdhaniorder@gmail.com. A temporary test
+  sender (1972vragrawal@gmail.com) is also whitelisted for QA — remove once
+  testing is complete.`;
 
-module.exports = { matchers, type, rule };
+module.exports = { matchers, type, rule, domConfig };
