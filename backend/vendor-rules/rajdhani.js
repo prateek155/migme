@@ -60,26 +60,27 @@
 const domConfig = {
 
   fields: {
-    // GOTCHA 3: "Order" row is first in the DOM, before "IRCTC Order ID"
-    // (which also contains the substring "Order") — first-match should be
-    // safe, but verify if your engine matches last-occurrence instead.
     orderNo: {
       labelText: 'Order',
+      skipColon: true,
       transform: v => v.trim().replace(/^#/, ''),
     },
 
     irctcOrderId: {
       labelText: 'IRCTC Order ID',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
     customerName: {
       labelText: 'Customer Name',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
     contactNo: {
       labelText: 'Mobile No',
+      skipColon: true,
       transform: v => {
         const raw = v.trim();
         const match = raw.match(/(?:^|[^\d])([6-9]\d{9})(?:[^\d]|$)/);
@@ -93,59 +94,64 @@ const domConfig = {
 
     trainInfo: {
       labelText: 'Train No / Name',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
-    // Raw "13-08-2026" — always DD-MM-YYYY for this vendor (single format,
-    // unlike RailFood's two competing formats). Converted in postProcess.
     _deliveryDateRaw: {
       labelText: 'Delivery Date',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
-    // Raw "23:28:00" (HH:mm:ss) — trimmed to HH:mm in postProcess.
     _etaRaw: {
       labelText: 'ETA',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
     station: {
       labelText: 'Station',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
-    // GOTCHA 1: value cell is a <th>, not a <td> — verify sibling-value
-    // lookup selector covers both tag types for this row.
+    // GOTCHA 1: value cell is a <th>, not a <td> — sibling selector already
+    // covers 'td, th', skipColon now correctly steps PAST the ':' <td>
+    // to land on that <th>.
     coach: {
       labelText: 'Coach / Bearth',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
-    // Unambiguous, non-overlapping labels used to COMPUTE totalAmount below
-    // (see GOTCHA 3) instead of trusting a bare "Amount" label match.
     _totalAmountRaw: {
       labelText: 'Total Amount',
+      skipColon: true,
       transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
     },
 
     deliveryCharge: {
       labelText: 'Delivery Charges',
+      skipColon: true,
       transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
     },
 
-    // "0 / 0" → "Discount / Pre-Payment". Split into two numbers.
     _discountRaw: {
       labelText: 'Discount / Pre-Payment',
+      skipColon: true,
       transform: v => v.trim(),
     },
 
     otherCharges: {
       labelText: 'Other Charges',
+      skipColon: true,
       transform: v => parseFloat(v.replace(/[^\d.]/g, '')) || 0,
     },
 
     paymentType: {
       labelText: 'Payment Mode',
+      skipColon: true,
       transform: v => {
         const u = v.trim().toUpperCase();
         if (u === 'COD' || u === 'CASH' || u === 'CASH_ON_DELIVERY') return 'COD';
@@ -156,6 +162,7 @@ const domConfig = {
 
     remark: {
       labelText: 'Remarks',
+      skipColon: true,
       transform: v => {
         const t = v.trim();
         return (!t || t.toUpperCase() === 'N/A') ? null : t;
@@ -164,16 +171,13 @@ const domConfig = {
   },
 
   itemsTable: {
-    // GOTCHA 2: data rows are <th>, header row is <td> — selector for row
-    // cells must accept both, or every order will come back with 0 items.
+    // unchanged — itemsTable header/data parsing doesn't go through
+    // labelText sibling-lookup, so skipColon is irrelevant here
     columnMap: {
       'quantity':  'qty',
       'item name': 'rawItem',
     },
-
-    // No per-item price column for this vendor — only order-level totals.
     itemCellSplit: null,
-
     footerLabels: [
       'Total Amount',
       'Delivery Charges',
@@ -186,7 +190,7 @@ const domConfig = {
   },
 
   postProcess(order) {
-    // ── Delivery date: DD-MM-YYYY → YYYY-MM-DD (single fixed format) ──────
+    // unchanged — same as before
     const dateRaw = order._deliveryDateRaw || '';
     const dm = dateRaw.match(/(\d{1,2})-(\d{1,2})-(\d{4})/);
     order.deliveryDate = dm
@@ -194,25 +198,17 @@ const domConfig = {
       : null;
     delete order._deliveryDateRaw;
 
-    // ── ETA "23:28:00" → deliveryTime "23:28" ─────────────────────────────
     const etaRaw = order._etaRaw || '';
     const tm = etaRaw.match(/(\d{1,2}):(\d{2})/);
     order.deliveryTime = tm ? `${tm[1].padStart(2, '0')}:${tm[2]}` : null;
     delete order._etaRaw;
 
-    // ── Discount / Pre-Payment "0 / 0" → discount, prePayment ─────────────
     const discRaw = order._discountRaw || '';
     const dparts = discRaw.split('/').map(s => parseFloat(s.trim().replace(/[^\d.]/g, '')) || 0);
     order.discount = dparts[0] || 0;
     order.prePayment = dparts[1] || 0;
     delete order._discountRaw;
 
-    // ── GOTCHA 3 fix: compute final totalAmount from unambiguous fields ──
-    // final Amount = Total Amount + Delivery Charges + Other Charges - Discount
-    // (Confirmed correct on the sample order: 217 + 0 + 0 - 0 = 217, which
-    // matches the vendor's own "Amount" row. Re-verify against a second
-    // sample order that actually HAS a non-zero discount/charge before
-    // trusting this in production.)
     const base = order._totalAmountRaw || 0;
     order.totalAmount = base + (order.deliveryCharge || 0) + (order.otherCharges || 0) - (order.discount || 0);
     delete order._totalAmountRaw;
