@@ -1929,6 +1929,7 @@ async function sendNewOrderPush(clientId, orderData, tag) {
   } catch (e) {
     warn(`${tag} Could not read notifications flag for ${clientId}: ${e.message}`);
   }
+  
   let tokens = [];
   try {
     const snap = await getDocs(
@@ -1941,11 +1942,14 @@ async function sendNewOrderPush(clientId, orderData, tag) {
     );
     return;
   }
+  
   if (tokens.length === 0) return;
 
   try {
-    const title = "🛎 New Order";
-    const body = `${orderData.orderNo || ""} · ${orderData.customerName || ""} · ₹${orderData.totalAmount || 0}`;
+    // ⭐ Enhanced notification for continuous ringing
+    const title = "🔔 New Order Received!";
+    const body = `Order #${orderData.orderNo || ""} · ${orderData.customerName || "New Customer"} · ₹${orderData.totalAmount || 0}`;
+    
     if (typeof admin.messaging === "function") {
       const res = await admin
         .messaging()
@@ -1953,11 +1957,27 @@ async function sendNewOrderPush(clientId, orderData, tag) {
           tokens,
           notification: { title, body },
           data: {
+            // ⭐ CRITICAL: These fields trigger continuous notification
             type: "new_order",
+            orderId: `${clientId}_${orderData.orderNo}`,  // Firestore doc ID
+            order_id: `${clientId}_${orderData.orderNo}`, // Backup field for compatibility
             orderNo: String(orderData.orderNo || ""),
             clientId,
+            // ⭐ Additional data for rich notification
+            customerName: String(orderData.customerName || ""),
+            totalAmount: String(orderData.totalAmount || 0),
+            trainInfo: String(orderData.trainInfo || ""),
+          },
+          android: {
+            priority: 'high',  // ⭐ High priority for instant delivery
+            notification: {
+              channelId: 'new_orders_critical',  // ⭐ Matches Flutter channel
+              priority: 'max',
+              sound: 'notification_sound',       // ⭐ Custom sound (if added)
+            },
           },
         });
+        
       const failedTokens = [];
       res.responses.forEach((r, i) => {
         if (r.success) return;
@@ -1971,12 +1991,14 @@ async function sendNewOrderPush(clientId, orderData, tag) {
           failedTokens.push(res.responses[i].originalToken || tokens[i]);
         }
       });
-      // cleanup stale tokens so dead devices stop getting billed
+      
+      // Cleanup stale tokens
       for (const tok of failedTokens) {
         try {
           await deleteDoc(doc(db, "clients", clientId, "fcmTokens", tok));
         } catch (_) {}
       }
+      
       log(
         `${tag} 🔔 FCM sent to ${res.successCount}/${tokens.length} device(s) for #${orderData.orderNo}`,
       );
