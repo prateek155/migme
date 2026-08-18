@@ -18,20 +18,7 @@ const { decode: decodeQP } = require("quoted-printable");
 
 // ── Firebase client SDK ────────────────────────────────────────────────────
 const { initializeApp } = require("firebase/app");
-const {
-  getFirestore,
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  addDoc,
-  query,
-  where,
-  onSnapshot,
-} = require("firebase/firestore");
+const { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, where, onSnapshot, runTransaction, } = require("firebase/firestore");
 
 const { getAuth, signInWithCustomToken } = require("firebase/auth");
 
@@ -378,8 +365,43 @@ function rateLimit(maxPerMinute = 20) {
 const dailyOrderCache = {};
 const dailyEmailCache = {};
 
+// ✅ FIX #8 — Timezone-safe "today" (IST), regardless of server TZ.
+// Previously `new Date().toISOString().slice(0,10)` used the server's
+// wall-clock (often UTC on Railway/Render), so "today" could roll over at
+// 5:30 AM IST instead of midnight IST — shifting deliveryDate-based
+// grouping for late-night orders. This computes the calendar date in
+// Asia/Kolkata explicitly, no matter what TZ the host runs in.
+const IST_TZ = "Asia/Kolkata";
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: IST_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date()); // en-CA gives YYYY-MM-DD directly
+}
+
+function msUntilNextISTMidnight() {
+  const now = new Date();
+  // Get current IST wall-clock time as a Date-parsable string
+  const istNowStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: IST_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now);
+  const [datePart, timePart] = istNowStr.split(", ");
+  const [mm, dd, yyyy] = datePart.split("/");
+  const [HH, MM, SS] = timePart.split(":");
+  const istNow = new Date(`${yyyy}-${mm}-${dd}T${HH}:${MM}:${SS}`);
+  const istNext = new Date(istNow);
+  istNext.setDate(istNext.getDate() + 1);
+  istNext.setHours(0, 1, 0, 0); // 00:01 IST — small buffer past midnight
+  return istNext - istNow;
 }
 
 const orderDocId = (clientId, orderNo) => `${clientId}_${orderNo}`;
@@ -401,10 +423,7 @@ function getEmailSet(dateStr, clientId) {
 }
 
 function scheduleMidnightReset() {
-  const now = new Date();
-  const next = new Date(now);
-  next.setDate(next.getDate() + 1);
-  next.setHours(0, 1, 0, 0);
+  const ms = msUntilNextISTMidnight();
   setTimeout(() => {
     const today = todayStr();
     for (const key of Object.keys(dailyOrderCache)) {
@@ -413,9 +432,9 @@ function scheduleMidnightReset() {
     for (const key of Object.keys(dailyEmailCache)) {
       if (key !== today) delete dailyEmailCache[key];
     }
-    log(`🕛 Midnight cache reset — keeping only ${today}`);
+    log(`🕛 Midnight (IST) cache reset — keeping only ${today}`);
     scheduleMidnightReset();
-  }, next - now);
+  }, ms);
 }
 scheduleMidnightReset();
 
@@ -458,6 +477,11 @@ async function warmEmailCache(clientId) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // recordProcessedEmail
+// ✅ FIX #6 — index-doc race condition. Multiple emails in the same batch
+// (Promise.allSettled) used to read-modify-write the SAME daily index doc
+// concurrently, so parallel writes could clobber each other's UID (last
+// write wins). Now wrapped in a Firestore transaction so concurrent calls
+// serialize safely and no UID ever gets lost from the index.
 // ═══════════════════════════════════════════════════════════════════════════
 async function recordProcessedEmail(uidStr, orderNo, status, clientId, extraFields = {}) {
   const date = todayStr();
@@ -494,11 +518,13 @@ async function recordProcessedEmail(uidStr, orderNo, status, clientId, extraFiel
         "processed_emails_index",
         emailIndexId(clientId, date),
       );
-      const indexSnap = await getDoc(indexRef);
-      const existing = indexSnap.exists() ? indexSnap.data().uids || [] : [];
-      if (!existing.includes(uidStr)) {
-        await setDoc(indexRef, { uids: [...existing, uidStr] }, { merge: true });
-      }
+      await runTransaction(db, async (tx) => {
+        const indexSnap = await tx.get(indexRef);
+        const existing = indexSnap.exists() ? indexSnap.data().uids || [] : [];
+        if (!existing.includes(uidStr)) {
+          tx.set(indexRef, { uids: [...existing, uidStr] }, { merge: true });
+        }
+      });
     }
   } catch (e) {
     warn(`recordProcessedEmail failed: ${e.message}`);
@@ -563,10 +589,16 @@ app.get("/", (_req, res) => {
   );
 });
 
+// ✅ FIX #2 — /logs used to fail OPEN if LOG_TOKEN wasn't set (anyone could
+// read logs with no token at all). Now fails CLOSED: no LOG_TOKEN configured
+// means the endpoint is forbidden by default, not silently public.
 app.get("/logs", rateLimit(30), (req, res) => {
   const token = process.env.LOG_TOKEN;
-  if (token && req.query.token !== token)
-    return res.status(403).send("Forbidden");
+  if (!token) {
+    warn("GET /logs: LOG_TOKEN not configured — endpoint locked down by default");
+    return res.status(403).send("Forbidden — LOG_TOKEN not configured");
+  }
+  if (req.query.token !== token) return res.status(403).send("Forbidden");
   try {
     const lines = fs
       .readFileSync(LOG_FILE, "utf8")
@@ -588,6 +620,26 @@ function requireAdmin(req, res, next) {
   }
   next();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ✅ WATCHDOG STATUS ENDPOINT — quick visibility into per-client poller health
+// (supports FIX #7 below). Handy for 50+ clients where manual log-scanning
+// isn't practical.
+// ═══════════════════════════════════════════════════════════════════════════
+app.get("/api/pollers/status", requireAdmin, (_req, res) => {
+  const now = Date.now();
+  const rows = [];
+  for (const [clientKey, info] of pollerHealth.entries()) {
+    rows.push({
+      clientId: clientKey,
+      businessName: info.businessName,
+      lastActivityAt: new Date(info.lastActivityAt).toISOString(),
+      secondsSinceActivity: Math.round((now - info.lastActivityAt) / 1000),
+      consecutiveFailures: info.consecutiveFailures || 0,
+    });
+  }
+  res.json({ pollers: rows, activeCount: globalStopFns.size });
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CLIENTS  (email-polling clients — used by watchClients() / IMAP pollers)
@@ -839,11 +891,26 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // harmless by isHarmlessSocketError() (Layer 1) and is also caught locally
 // by processEmail's / runPollingCycle's own try/catch, which triggers the
 // existing reconnect logic — so a hang can never block the process anymore.
+//
+// ✅ FIX #5 — a timed-out promise used to keep running in the background
+// forever (its underlying IMAP command was never actually cancelled), which
+// risked a stale in-flight command colliding with a fresh command issued on
+// a reconnected socket (IMAP is strictly sequential per-connection). Now
+// withTimeout optionally accepts the live `connection` and force-closes the
+// socket the instant a timeout fires, guaranteeing the dangling command's
+// socket is dead and cannot desync a future command.
 // ═══════════════════════════════════════════════════════════════════════════
-function withTimeout(promise, ms, label) {
+function withTimeout(promise, ms, label, connectionToKillOnTimeout = null) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms);
+    timer = setTimeout(() => {
+      if (connectionToKillOnTimeout) {
+        try {
+          connectionToKillOnTimeout.end();
+        } catch (_) {}
+      }
+      reject(new Error(`${label}_TIMEOUT`));
+    }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
@@ -2051,11 +2118,13 @@ async function processEmail(
     // Previously this call had NO timeout at all — a half-open socket here
     // would freeze this email's processing forever, silently blocking the
     // whole Promise.allSettled batch. Now it fails fast at 20s and the outer
-    // catch below handles it as a normal retry-next-cycle case.
+    // catch below handles it as a normal retry-next-cycle case. Also passes
+    // `connection` so a timeout force-closes the stale socket (FIX #5).
     const fullMsg = await withTimeout(
       connection.search([["UID", uid]], { bodies: [""], markSeen: false }),
       20000,
       "FULL_FETCH",
+      connection,
     );
     if (!fullMsg || fullMsg.length === 0) return;
     const parsed = await simpleParser(
@@ -2237,6 +2306,7 @@ async function processEmail(
     }
 
     // ── PATH B: AI / Bedrock ──────────────────────────────────────────────
+    let currentAiAttemptNo = null; // ✅ FIX #1 — tracked across whole function now
     if (!orderData) {
       let previousAttempts = 0;
       try {
@@ -2264,6 +2334,7 @@ async function processEmail(
       }
 
       const thisAttemptNo = previousAttempts + 1;
+      currentAiAttemptNo = thisAttemptNo; // ✅ FIX #1
       log(`${tag}    🤖 AI attempt ${thisAttemptNo}/${MAX_AI_ATTEMPTS} for UID ${uidStr}`);
       try {
         await setDoc(
@@ -2322,11 +2393,42 @@ async function processEmail(
       .replace(/\//g, "-")
       .trim();
 
+    // ✅ FIX #1 — previously: AI succeeded but produced no usable order
+    // number (AUTO_ fallback) just `return`ed here, leaving the Firestore
+    // status stuck at "ai_in_progress" forever. Because that status is
+    // NOT one of the terminal ones checked at the top of this function, the
+    // email would be re-sent to Bedrock on every single cycle forever —
+    // silent, unbounded AI cost with no cap. Now this path also counts
+    // against MAX_AI_ATTEMPTS and gets permanently retired once exhausted,
+    // exactly like a hard AI failure.
     if (!finalOrderNo || finalOrderNo.startsWith("AUTO_")) {
-      log(
-        `${tag}    ⚠️ No valid order number extracted — stays unread for retry`,
-      );
-      sessionUIDCache.add(uid);
+      const attemptNo = currentAiAttemptNo || 1;
+      const isExhausted = attemptNo >= MAX_AI_ATTEMPTS;
+      try {
+        await setDoc(
+          doc(db, "processed_emails", emailDocId(clientId, uidStr)),
+          {
+            status: isExhausted ? "ai_exhausted" : "ai_failed",
+            aiAttempts: attemptNo,
+            lastAttemptAt: new Date().toISOString(),
+            note: "AI parsed but no usable order number extracted",
+          },
+          { merge: true },
+        );
+      } catch (_) {}
+
+      if (isExhausted) {
+        warn(
+          `${tag}    ⚠️ No valid order number after ${attemptNo}/${MAX_AI_ATTEMPTS} attempts — permanently skipping UID ${uidStr}`,
+        );
+        sessionUIDCache.add(uid);
+        await markEmailAsRead(connection, uid);
+      } else {
+        log(
+          `${tag}    ⚠️ No valid order number extracted (attempt ${attemptNo}/${MAX_AI_ATTEMPTS}) — stays unread for retry`,
+        );
+        sessionUIDCache.add(uid);
+      }
       return;
     }
 
@@ -2488,6 +2590,51 @@ async function processEmail(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ✅ PER-CLIENT POLLER HEALTH TRACKING (supports FIX #7 — staleness watchdog)
+//
+// Every successful cycle iteration (whether it found new mail or not) and
+// every reconnect touches `lastActivityAt` for that client. The watchdog
+// interval below compares this against wall-clock time — if a poller has
+// gone quiet for too long even though its stopFn is still registered
+// (i.e. it looks "alive" but is actually frozen on some new/unknown hang),
+// the watchdog force-restarts it. This is the generic safety net that
+// catches failure modes we haven't seen yet, not just the ones we've
+// already patched.
+// ═══════════════════════════════════════════════════════════════════════════
+const pollerHealth = new Map(); // clientId -> { businessName, lastActivityAt, consecutiveFailures }
+
+function touchPollerHealth(clientId, businessName) {
+  const existing = pollerHealth.get(clientId);
+  pollerHealth.set(clientId, {
+    businessName,
+    lastActivityAt: Date.now(),
+    consecutiveFailures: existing ? existing.consecutiveFailures : 0,
+  });
+}
+
+function bumpPollerFailure(clientId, businessName) {
+  const existing = pollerHealth.get(clientId);
+  const failures = existing ? (existing.consecutiveFailures || 0) + 1 : 1;
+  pollerHealth.set(clientId, {
+    businessName,
+    lastActivityAt: existing ? existing.lastActivityAt : Date.now(),
+    consecutiveFailures: failures,
+  });
+  return failures;
+}
+
+function resetPollerFailures(clientId, businessName) {
+  const existing = pollerHealth.get(clientId);
+  pollerHealth.set(clientId, {
+    businessName,
+    lastActivityAt: Date.now(),
+    consecutiveFailures: 0,
+  });
+}
+
+const STALE_POLLER_MS = 5 * 60 * 1000; // 5 minutes of silence = considered stuck
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MULTI-TENANT IMAP POLLER
 // ═══════════════════════════════════════════════════════════════════════════
 async function pollClientInbox(
@@ -2499,6 +2646,7 @@ async function pollClientInbox(
 ) {
   const tag = `[${clientBusinessName}]`;
   log(`${tag} Starting IMAP polling for ${emailAddr}`);
+  touchPollerHealth(clientId, clientBusinessName);
 
   await warmEmailCache(clientId);
 
@@ -2517,6 +2665,15 @@ async function pollClientInbox(
   // events in a burst (e.g. multiple emails arriving together). Without
   // debouncing, each one would trigger its own immediate cycle() call.
   let idleDebounceTimer = null;
+
+  // ✅ FIX #3 — reconnect backoff. Consecutive reconnect failures no longer
+  // retry instantly in a tight loop — delay grows (5s → 15s → 30s → 60s,
+  // capped) so a chronically flaky client can never hammer Gmail's IMAP
+  // servers rapid-fire, which risked Google-side throttling that could
+  // affect this client (or, if limits are ever account/IP-shared, others).
+  // Failure count itself is tracked in the shared `pollerHealth` map (via
+  // bumpPollerFailure/resetPollerFailures) so the watchdog can see it too.
+  const RECONNECT_BACKOFF_STEPS = [5000, 15000, 30000, 60000];
 
   async function refreshClientSettings() {
     try {
@@ -2629,12 +2786,14 @@ async function pollClientInbox(
       await refreshClientSettings();
       if (isPaused) {
         log(`${tag} PAUSED — skipping cycle`);
+        touchPollerHealth(clientId, clientBusinessName); // still "healthy", just paused
         return;
       }
 
       // ✅ Production mode: only UNSEEN (unread) emails, wrapped in Layer 3
       // timeout so IMAP_HANG (silent half-open socket) can never freeze
-      // this cycle forever.
+      // this cycle forever. Passes `connection` so a timeout also
+      // force-closes the socket (FIX #5).
       //
       // ✅ SERVER-SIDE SINCE FILTER (perf fix)
       // Problem: without this, a newly-added client with hundreds of old
@@ -2659,6 +2818,7 @@ async function pollClientInbox(
         }),
         15000,
         "IMAP_HEADER_SEARCH",
+        connection,
       );
 
       const today = todayStr();
@@ -2700,6 +2860,10 @@ async function pollClientInbox(
         const remaining = newMessages.length - (i + BATCH_SIZE);
         if (remaining > 0) await delay(remaining > 6 ? 1500 : 500);
       }
+
+      // ✅ FIX #7 support — mark this client as "alive" after every
+      // successfully completed cycle (found mail or not).
+      touchPollerHealth(clientId, clientBusinessName);
     } catch (e) {
       err(`${tag} Cycle error: ${e.message}`);
       throw e;
@@ -2714,15 +2878,30 @@ async function pollClientInbox(
       if (cancelled) return;
       if (isPaused) {
         log(`${tag} PAUSED — retry in 60s`);
+        touchPollerHealth(clientId, clientBusinessName);
         if (!cancelled) setTimeout(startPolling, 60000);
         return;
       }
 
-      connection = await imaps.connect(IMAP_CONFIG);
+      // ✅ FIX #4 — imaps.connect() previously had NO timeout at all. If the
+      // TCP handshake / TLS negotiation hung (half-open socket before any
+      // 'error'/'close' event could ever fire), startPolling() would freeze
+      // forever with no retry ever scheduled — silently killing this
+      // client's polling with zero visibility. Now bounded to 20s.
+      connection = await withTimeout(
+        imaps.connect(IMAP_CONFIG),
+        20000,
+        "IMAP_CONNECT",
+      );
       activeConn = connection;
       attachSocketGuards(connection); // ✅ Layer 2
-      await connection.openBox("INBOX");
+
+      // ✅ FIX #4 — same reasoning for openBox(): previously unwrapped, so a
+      // hang here (e.g. Gmail slow to respond right after connect) could
+      // freeze startPolling() forever too.
+      await withTimeout(connection.openBox("INBOX"), 15000, "OPEN_BOX", connection);
       sessionUIDCache = new Set();
+      resetPollerFailures(clientId, clientBusinessName); // ✅ FIX #3 — reset backoff on success
       log(`${tag} ✅ Connected to inbox`);
 
       // ✅ Wraps runPollingCycle with the overlap guard — used by BOTH the
@@ -2754,13 +2933,41 @@ async function pollClientInbox(
           try {
             connection.end();
           } catch (_) {}
+
+          // ✅ FIX #3 — backoff BEFORE attempting reconnect, growing with
+          // consecutive failures instead of retrying instantly every time.
+          const failureCount = bumpPollerFailure(clientId, clientBusinessName);
+          const backoffMs =
+            RECONNECT_BACKOFF_STEPS[
+              Math.min(failureCount - 1, RECONNECT_BACKOFF_STEPS.length - 1)
+            ];
+          if (failureCount > 1) {
+            warn(
+              `${tag} Consecutive reconnect failure #${failureCount} — backing off ${backoffMs / 1000}s before retry`,
+            );
+            cycleRunning = false;
+            if (!cancelled) setTimeout(startPolling, backoffMs);
+            return;
+          }
+
           try {
-            connection = await imaps.connect(IMAP_CONFIG);
+            // ✅ FIX #4 — reconnect path also gets bounded timeouts now.
+            connection = await withTimeout(
+              imaps.connect(IMAP_CONFIG),
+              20000,
+              "IMAP_RECONNECT",
+            );
             activeConn = connection;
             attachSocketGuards(connection); // ✅ Layer 2 — reattach on every reconnect
             attachMailListener(connection, cycle); // ✅ reattach IDLE listener too
-            await connection.openBox("INBOX");
+            await withTimeout(
+              connection.openBox("INBOX"),
+              15000,
+              "OPEN_BOX_RECONNECT",
+              connection,
+            );
             sessionUIDCache = new Set();
+            resetPollerFailures(clientId, clientBusinessName);
             log(`${tag} ✅ Reconnected`);
 
             // ✅ FIX #2 — IMMEDIATE RETRY AFTER RECONNECT
@@ -2777,9 +2984,15 @@ async function pollClientInbox(
             await cycle();
             return;
           } catch (e2) {
-            err(`${tag} Reconnect failed: ${e2.message} — retry in 60s`);
+            const nextBackoff =
+              RECONNECT_BACKOFF_STEPS[
+                Math.min(failureCount, RECONNECT_BACKOFF_STEPS.length - 1)
+              ];
+            err(
+              `${tag} Reconnect failed: ${e2.message} — retry in ${nextBackoff / 1000}s`,
+            );
             cycleRunning = false;
-            if (!cancelled) setTimeout(startPolling, 60000);
+            if (!cancelled) setTimeout(startPolling, nextBackoff);
             return;
           }
         }
@@ -2797,8 +3010,16 @@ async function pollClientInbox(
       cycle();
     } catch (error) {
       if (cancelled) return;
-      err(`${tag} IMAP connect failed: ${error.message} — retry in 60s`);
-      setTimeout(startPolling, 60000);
+      // ✅ FIX #3 — initial-connect failures also back off instead of
+      // always waiting a flat 60s (kept as the max step for parity with
+      // previous behavior, but early failures recover faster).
+      const failureCount = bumpPollerFailure(clientId, clientBusinessName);
+      const backoffMs =
+        RECONNECT_BACKOFF_STEPS[
+          Math.min(failureCount - 1, RECONNECT_BACKOFF_STEPS.length - 1)
+        ];
+      err(`${tag} IMAP connect failed: ${error.message} — retry in ${backoffMs / 1000}s`);
+      setTimeout(startPolling, backoffMs);
     }
   }
 
@@ -2814,6 +3035,7 @@ async function pollClientInbox(
       } catch (_) {}
       activeConn = null;
     }
+    pollerHealth.delete(clientId);
   };
 }
 
@@ -2889,16 +3111,19 @@ async function watchClients() {
   // ═══════════════════════════════════════════════════════════════════════
   // ✅ FIX — WATCHDOG / SELF-HEALING CHECK
   //
-  // Problem: if a client's poller ever silently stalls (an edge case not
-  // otherwise caught — e.g. an unexpected exception path that leaves no
-  // reconnect scheduled), there was no detection. With 15+ clients, manually
-  // noticing "which one went quiet" is impractical.
+  // Problem: if a client's poller ever silently stalls, the ORIGINAL
+  // watchdog only checked whether an entry existed in `activePolls` — a
+  // poller frozen inside some hang (like the Paras Bhavan incident) still
+  // has its stopFn registered, so it looked "alive" and was never caught.
   //
-  // Fix: every 5 minutes, compare the active Firestore client list against
-  // activePolls. Any active client missing a poller gets restarted
-  // automatically. This is a cheap safety net on top of the fixes above —
-  // it should rarely ever need to act, but guarantees no client is
-  // permanently stuck without a working poller.
+  // ✅ FIX #7 — this watchdog now does TWO checks every 5 minutes:
+  //   1. Missing poller (original check) — active client with no entry in
+  //      activePolls at all → start one.
+  //   2. STALE poller (NEW) — client has an entry, but pollerHealth shows
+  //      no activity (`lastActivityAt`) for more than STALE_POLLER_MS (5
+  //      min) → treat as stuck, force-stop the old one and start fresh.
+  //      This is what would have caught the Paras Bhavan freeze even if
+  //      its root cause had been something we hadn't already patched.
   // ═══════════════════════════════════════════════════════════════════════
   setInterval(async () => {
     try {
@@ -2908,18 +3133,47 @@ async function watchClients() {
       for (const d of snap.docs) {
         const clientKey = d.id;
         const data = d.data();
+        const plainPassword = () =>
+          /^[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*$/.test(
+            data.appPassword,
+          )
+            ? decrypt(data.appPassword)
+            : data.appPassword;
+
         if (!activePolls.has(clientKey)) {
           warn(`[Watchdog] Client ${data.businessName || clientKey} has no active poller — restarting`);
-          const plainPassword =
-            /^[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*$/.test(
-              data.appPassword,
-            )
-              ? decrypt(data.appPassword)
-              : data.appPassword;
           const stopFn = await pollClientInbox(
             clientKey,
             data.email,
-            plainPassword,
+            plainPassword(),
+            data.businessName,
+            data.createdAt,
+          );
+          activePolls.set(clientKey, stopFn);
+          globalStopFns.add(stopFn);
+          continue;
+        }
+
+        // ✅ FIX #7 — staleness check for pollers that "exist" but are frozen.
+        const health = pollerHealth.get(clientKey);
+        if (health && Date.now() - health.lastActivityAt > STALE_POLLER_MS) {
+          err(
+            `[Watchdog] Client ${data.businessName || clientKey} has been silent for ${Math.round(
+              (Date.now() - health.lastActivityAt) / 1000,
+            )}s (> ${STALE_POLLER_MS / 1000}s threshold) — poller looks stuck, force-restarting`,
+          );
+          const oldStopFn = activePolls.get(clientKey);
+          try {
+            oldStopFn();
+          } catch (_) {}
+          globalStopFns.delete(oldStopFn);
+          activePolls.delete(clientKey);
+          pollerHealth.delete(clientKey);
+
+          const stopFn = await pollClientInbox(
+            clientKey,
+            data.email,
+            plainPassword(),
             data.businessName,
             data.createdAt,
           );
