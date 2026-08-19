@@ -4,7 +4,7 @@ import {
   TouchableOpacity, TextInput, ScrollView, Modal, Dimensions,  Animated 
 } from 'react-native';
 import {
-  collection, getDocs, onSnapshot, query, where,
+  collection, getDocs, query, where,
   orderBy, limit, startAfter, getCountFromServer,
   updateDoc, doc
 } from 'firebase/firestore';
@@ -525,14 +525,31 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
     : activeList;
 
   // ── Fetch executives ──
-  useEffect(() => {
-    const unsubscribe = onSnapshot(
-      query(collection(db, 'executives'), where('clientId', '==', clientId)),
-      (snapshot) => setExecutives(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))),
-      (error) => console.error('Execs sync error:', error.message)
-    );
-    return () => unsubscribe();
+  // Changed from a real-time onSnapshot listener to a one-time getDocs fetch.
+  // Executives don't change often enough to need a live connection, and the
+  // onSnapshot channel was the source of the "Listen/channel 400" errors you
+  // saw in DevTools (unrelated to the orders pagination work — this was a
+  // separate long-lived connection). Removing it also means one less open
+  // connection per screen, which is one less thing that can flake on a bad
+  // network/proxy/ad-blocker.
+  //
+  // To keep the list reasonably fresh without a live listener, this refetches
+  // whenever the client changes AND whenever the assign modal is opened
+  // (see openAssignModal below) — exactly when a stale list would matter most.
+  const fetchExecutives = React.useCallback(async () => {
+    try {
+      const snapshot = await getDocs(
+        query(collection(db, 'executives'), where('clientId', '==', clientId))
+      );
+      setExecutives(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (error) {
+      console.error('Execs fetch error:', error.message);
+    }
   }, [clientId]);
+
+  useEffect(() => {
+    fetchExecutives();
+  }, [fetchExecutives]);
 
   // ── Fetch total count once per filter change (1 aggregation read, NOT N reads) ──
   useEffect(() => {
@@ -753,6 +770,7 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
     setSelectedOrder(order);
     setAssignDropdownPos(pos);
     setAssignModalVisible(true);
+    fetchExecutives(); // refresh right when it matters, since we no longer hold a live listener
   };
 
   const handleAssignExec = async (exec) => {
