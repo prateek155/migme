@@ -1,9 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Platform,
   TouchableOpacity, TextInput, ScrollView, Modal, Dimensions,  Animated 
 } from 'react-native';
-import { collection, getDocs,   onSnapshot, query, where, updateDoc, doc } from 'firebase/firestore';
+import {
+  collection, getDocs, onSnapshot, query, where,
+  orderBy, limit, startAfter, getCountFromServer,
+  updateDoc, doc
+} from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../firebaseConfig';
 
@@ -318,6 +322,10 @@ const DateSectionHeader = ({ label }) => (
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pagination Bar
+// NOTE: True server-side cursor pagination only supports First page (cursor=null)
+// + Previous (cached cursor) + Next (startAfter). "Jump to last page" is removed
+// on purpose — it would require reading the whole collection, defeating the
+// point of this change.
 // ─────────────────────────────────────────────────────────────────────────────
 const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, onItemsPerPageChange }) => {
   const [pageSizeDropdownVisible, setPageSizeDropdownVisible] = useState(false);
@@ -371,10 +379,9 @@ const PaginationBar = ({ currentPage, totalItems, itemsPerPage, onPageChange, on
       <Text style={styles.pageRangeText}>{startItem}–{endItem} of {totalItems}</Text>
 
       <View style={styles.pageNavRow}>
-        <NavBtn iconName="play-skip-back"    onPress={() => onPageChange(1)}               disabled={currentPage === 1} />
-        <NavBtn iconName="chevron-back"      onPress={() => onPageChange(currentPage - 1)} disabled={currentPage === 1} />
-        <NavBtn iconName="chevron-forward"   onPress={() => onPageChange(currentPage + 1)} disabled={currentPage === totalPages} />
-        <NavBtn iconName="play-skip-forward" onPress={() => onPageChange(totalPages)}      disabled={currentPage === totalPages} />
+        <NavBtn iconName="play-skip-back"  onPress={() => onPageChange(1)}               disabled={currentPage === 1} />
+        <NavBtn iconName="chevron-back"    onPress={() => onPageChange(currentPage - 1)} disabled={currentPage === 1} />
+        <NavBtn iconName="chevron-forward" onPress={() => onPageChange(currentPage + 1)} disabled={currentPage === totalPages} />
       </View>
     </View>
   );
@@ -393,7 +400,7 @@ const SkeletonRow = () => {
         Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
       ])
     ).start();
-  }, []);
+  }, [shimmer]); // shimmer is a stable useRef value; included only to satisfy exhaustive-deps
 
   const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
 
@@ -437,16 +444,48 @@ const SkeletonLoader = () => (
 //   - an array of strings, e.g. ["Completed", "Cancelled"] → "All Orders" mode:
 //     fetches every status in the array and groups rows by delivery date,
 //     with the current date at the top and older dates continuing below.
+//
+// PAGINATION MODEL (changed):
+//   Instead of loading ALL matching orders and slicing them client-side,
+//   we now use Firestore cursor pagination (orderBy + limit + startAfter).
+//   Only `itemsPerPage` documents are read per page view. A single
+//   `getCountFromServer` aggregation read gives the total count for the
+//   "X–Y of Z" label and page-count math, without reading every document.
+//
+//   This uses your existing composite index:
+//     orders → clientId (Asc), status (Asc), createdAt (Desc)
+//   (covers both `status ==` for single-status tabs and `status in [...]`
+//   for the "All" tab, since Firestore serves `in` queries off the same
+//   index as equality on that field.)
 export default function FilteredOrdersScreen({ statusFilter, title, clientId }) {
-  const [orders, setOrders]                 = useState([]);
-  const [filteredOrders, setFilteredOrders] = useState([]);
+  const [orders, setOrders]                 = useState([]); // holds ONLY the current page's docs
   const [executives, setExecutives]         = useState([]);
   const [loading, setLoading]               = useState(true);
-  const [searchQuery, setSearchQuery]       = useState('');
+
+  // ── Search state ──
+  // searchInput: raw text as the user types (updates every keystroke)
+  // debouncedSearch: same value, but only updates 400ms after typing stops —
+  //   prevents firing a Firestore query on every keystroke
+  // searchResults: null = not searching (show normal paginated `orders`);
+  //   [] or [...] = search is active, these are the server-matched results
+  const [searchInput, setSearchInput]       = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [searchResults, setSearchResults]   = useState(null);
+  const [searchLoading, setSearchLoading]   = useState(false);
 
   // Pagination state
   const [currentPage, setCurrentPage]   = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [totalCount, setTotalCount]     = useState(0);
+  const [refreshToken, setRefreshToken] = useState(0); // bump to force a full pagination reset + refetch (e.g. after a status change)
+
+  // cursorsRef.current[i] = the last doc snapshot of page (i+1), used as `startAfter`
+  // to fetch page (i+2). cursorsRef.current[0] is always null (page 1 has no cursor).
+  // Kept in a ref (not state) on purpose: navigation is strictly sequential
+  // (First / Previous / Next only), so every cursor we'll ever need was already
+  // written by the time the user can click to it — no stale-closure risk, and
+  // no extra re-renders just to store a cache.
+  const cursorsRef = useRef([null]);
 
   // Assign modal
   const [assignModalVisible, setAssignModalVisible] = useState(false);
@@ -454,26 +493,36 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   const [assignDropdownPos, setAssignDropdownPos]   = useState({ x: 0, y: 0, width: 0, height: 0 });
 
   const isAllOrders = Array.isArray(statusFilter);
+  const filterKey = isAllOrders ? JSON.stringify(statusFilter) : statusFilter;
+  const isSearchActive = debouncedSearch.trim().length > 0;
 
-  // Derived pagination values
-  const totalItems  = filteredOrders.length;
-  const totalPages  = Math.max(1, Math.ceil(totalItems / itemsPerPage));
-  const startIdx    = (currentPage - 1) * itemsPerPage;
-  const pagedOrders = filteredOrders.slice(startIdx, startIdx + itemsPerPage);
+  // Identifies "this exact query" — tab, page size, client, and any forced refresh.
+  // When this changes, pagination must reset to page 1 with a clean cursor cache.
+  const queryVersion = `${filterKey}::${itemsPerPage}::${clientId}::${refreshToken}`;
+  const prevQueryVersionRef = useRef(queryVersion);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
+
+  // While searching, show server-matched results (global, across all matching
+  // orders — not just the loaded page). Otherwise show the normal paginated list.
+  const activeList = isSearchActive ? (searchResults || []) : orders;
 
   // When in "All Orders" mode, attach date-section-header info to each row
   // so the list reads: Today's orders → Yesterday's → the day before, etc.
+  // NOTE: ordering is by createdAt desc (paginated) or orderNo asc
+  // (search results) — not deliveryDate — so date grouping happens purely
+  // within whatever set is currently displayed.
   const displayData = isAllOrders
-    ? pagedOrders.map((ord, idx) => {
+    ? activeList.map((ord, idx) => {
         const currKey = getDateKey(ord.deliveryDate);
-        const prevKey = idx === 0 ? null : getDateKey(pagedOrders[idx - 1].deliveryDate);
+        const prevKey = idx === 0 ? null : getDateKey(activeList[idx - 1].deliveryDate);
         return {
           ...ord,
           _showDateHeader: currKey !== prevKey,
           _dateHeaderLabel: getDateHeaderLabel(ord.deliveryDate),
         };
       })
-    : pagedOrders;
+    : activeList;
 
   // ── Fetch executives ──
   useEffect(() => {
@@ -485,111 +534,216 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
     return () => unsubscribe();
   }, [clientId]);
 
-  // ── Fetch orders ──
+  // ── Fetch total count once per filter change (1 aggregation read, NOT N reads) ──
   useEffect(() => {
-  let mounted = true;
+    let mounted = true;
 
-  const loadOrders = async () => {
-    try {
-      const statusArray = isAllOrders ? statusFilter : [statusFilter];
+    const fetchCount = async () => {
+      try {
+        const statusArray = isAllOrders ? statusFilter : [statusFilter];
+        const countSnap = await getCountFromServer(
+          query(
+            collection(db, 'orders'),
+            where('clientId', '==', clientId),
+            where('status', 'in', statusArray)
+          )
+        );
+        if (!mounted) return;
+        const count = countSnap.data().count;
+        setTotalCount(count);
+        console.log(`[Orders] Total matching orders (count query, not full read): ${count}`);
+      } catch (error) {
+        console.error('Orders count fetch error:', error.message);
+      }
+    };
 
-      const q = query(
-        collection(db, "orders"),
-        where("clientId", "==", clientId),
-        where("status", "in", statusArray)
-      );
+    fetchCount();
+    return () => { mounted = false; };
+    // isAllOrders/statusFilter are included for lint correctness — in practice
+    // they can't change without filterKey also changing (it's derived from
+    // statusFilter), so this doesn't introduce extra reruns beyond what
+    // filterKey already causes.
+  }, [filterKey, clientId, refreshToken, isAllOrders, statusFilter]);
 
-      const snapshot = await getDocs(q);
+  // ── Fetch ONLY the current page's orders ──
+  // This single effect owns both "did the query change under us?" (tab, page
+  // size, client, or a forced refresh) and "which page are we fetching?".
+  // Handling both in one effect — instead of a separate reset effect — avoids
+  // a race where a reset effect and a fetch effect fire in the same commit
+  // using each other's stale, not-yet-applied state (which previously could
+  // cause a wasted fetch of the wrong page right before the correct one).
+  useEffect(() => {
+    let cancelled = false;
 
-      if (!mounted) return;
+    const isNewQuery = prevQueryVersionRef.current !== queryVersion;
+    prevQueryVersionRef.current = queryVersion;
 
-      const list = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data(),
-      }));
-
-      console.log("Orders Loaded:", list.length);
-
-      const counts = {};
-      list.forEach(order => {
-        counts[order.status] = (counts[order.status] || 0) + 1;
-      });
-
-      console.log("Status Counts:", counts);
-
-      if (isAllOrders) {
-  list.sort((a, b) => {
-    const aDateMs = toMillis(a.deliveryDate);
-    const bDateMs = toMillis(b.deliveryDate);
-
-    if (aDateMs !== bDateMs) return bDateMs - aDateMs;
-
-    const aPrinted = !!a.billPrintedAt;
-    const bPrinted = !!b.billPrintedAt;
-
-    if (aPrinted && !bPrinted) return -1;
-    if (!aPrinted && bPrinted) return 1;
-
-    if (aPrinted && bPrinted) {
-      return toMillis(b.billPrintedAt) - toMillis(a.billPrintedAt);
+    if (isNewQuery) {
+      console.log(`[Orders] Query changed → resetting to page 1 (filter=${filterKey}, pageSize=${itemsPerPage})`);
+      cursorsRef.current = [null];
+      if (currentPage !== 1) {
+        // Bail out now; setting currentPage triggers this same effect again,
+        // and by then prevQueryVersionRef already matches so it fetches page 1
+        // directly below — exactly one real fetch happens, not two.
+        setCurrentPage(1);
+        return () => { cancelled = true; };
+      }
     }
 
-    return toMillis(b.createdAt) - toMillis(a.createdAt);
-  });
-} else {
-  list.sort((a, b) => {
-    const aDateMs = toMillis(a.deliveryDate);
-    const bDateMs = toMillis(b.deliveryDate);
+    const pageToFetch = currentPage;
 
-    if (aDateMs !== bDateMs) return bDateMs - aDateMs;
+    const loadPage = async () => {
+      setLoading(true);
+      try {
+        const statusArray = isAllOrders ? statusFilter : [statusFilter];
+        const cursor = cursorsRef.current[pageToFetch - 1] ?? null;
 
-    return toMillis(b.createdAt) - toMillis(a.createdAt);
-  });
-}
+        const constraints = [
+          collection(db, 'orders'),
+          where('clientId', '==', clientId),
+          where('status', 'in', statusArray),
+          orderBy('createdAt', 'desc'),
+        ];
+        if (cursor) constraints.push(startAfter(cursor));
+        constraints.push(limit(itemsPerPage));
 
-      setOrders(list);
-      setLoading(false);
+        const snapshot = await getDocs(query(...constraints));
+        if (cancelled) return;
 
-    } catch (error) {
-      console.error("Orders fetch error:", error.message);
-      setLoading(false);
-    }
-  };
+        const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  loadOrders();
+        // ── Console logs so you can verify read volume in DevTools ──
+        console.log(`[Orders] Page ${pageToFetch} loaded → ${list.length} docs read (requested limit=${itemsPerPage})`);
+        const statusCounts = {};
+        list.forEach(o => { statusCounts[o.status] = (statusCounts[o.status] || 0) + 1; });
+        console.log('[Orders] Status breakdown on this page:', statusCounts);
 
-  return () => {
-    mounted = false;
-  };
+        setOrders(list);
 
-}, [isAllOrders ? JSON.stringify(statusFilter) : statusFilter, clientId]);
+        // Cache the cursor needed to fetch the NEXT page (only if not already cached)
+        const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+        if (lastDoc && cursorsRef.current[pageToFetch] === undefined) {
+          const next = [...cursorsRef.current];
+          next[pageToFetch] = lastDoc;
+          cursorsRef.current = next;
+        }
+      } catch (error) {
+        console.error('Orders fetch error:', error.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
 
-  // ── Effect 1: Filter orders whenever orders list or search query changes ──
-  // ✅ Does NOT reset the page — so staying on page 2/3 is preserved
+    loadPage();
+    return () => { cancelled = true; };
+    // clientId/filterKey/itemsPerPage/isAllOrders/statusFilter are included
+    // for lint correctness — they're all already baked into queryVersion, so
+    // none of them can change without queryVersion also changing. Listing
+    // them here doesn't add extra reruns; it just makes that explicit.
+  }, [currentPage, queryVersion, clientId, filterKey, itemsPerPage, isAllOrders, statusFilter]);
+
+  // ── Debounce the search input (waits 400ms after typing stops) ──
+  // Prevents firing a Firestore query on every single keystroke.
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredOrders(orders);
-    } else {
-      const q = searchQuery.toLowerCase();
-      setFilteredOrders(orders.filter(o =>
-        (o.orderNo || '').toString().toLowerCase().includes(q) ||
-        (o.vendorName || '').toLowerCase().includes(q) ||
-        (o.customerName || '').toLowerCase().includes(q) ||
-        (o.trainInfo || '').toLowerCase().includes(q) ||
-        (o.assignedExecutiveName || '').toLowerCase().includes(q)
-      ));
-    }
-  }, [searchQuery, orders]);
+    const handle = setTimeout(() => {
+      setDebouncedSearch(searchInput);
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
 
-  // ── Effect 2: Reset to page 1 ONLY when the search query changes ──
-  // ✅ Firestore updates do NOT trigger this — page stays stable
+  // ── Global search across ALL matching orders (not just the loaded page) ──
+  // No extra field, no backfill. Searches the EXISTING `orderNo` field as-is.
+  //
+  // Why two queries: your orderNo values are mixed-type in Firestore —
+  // plain numbers for email-parsed orders, and strings like "HOM1024" /
+  // "PS2048" for the other two sources. Firestore can't range-match across
+  // two different field types in one query, so:
+  //   1) If the typed term is all digits, run an EXACT match against the
+  //      numeric-typed orderNo docs (where orderNo == Number(term)).
+  //   2) Always also run a PREFIX match against the string-typed orderNo
+  //      docs (where orderNo >= term && orderNo <= term + '\uf8ff').
+  //      This only matches string order numbers that literally start with
+  //      the typed digits — so "1024" won't currently match "HOM1024" or
+  //      "PS2048" (Firestore can't search inside a string). Once the HOM/PS
+  //      prefixes are removed from those orders, their orderNo becomes a
+  //      plain digit string and this same prefix query starts matching them
+  //      automatically — no code change needed at that point.
+  // Results from both queries are merged and de-duplicated by doc id.
+  //
+  // Requires the composite index: orders → clientId (Asc), status (Asc), orderNo (Asc)
+  // (this single index supports both the equality query and the prefix/range query above).
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
+    let cancelled = false;
+    const term = debouncedSearch.trim();
+
+    if (!term) {
+      setSearchResults(null);
+      return;
+    }
+
+    const runSearch = async () => {
+      setSearchLoading(true);
+      try {
+        const statusArray = isAllOrders ? statusFilter : [statusFilter];
+        const isNumeric = /^\d+$/.test(term);
+
+        const queries = [];
+
+        if (isNumeric) {
+          // Exact match — catches plain-number orderNo docs (email-parsed orders)
+          queries.push(getDocs(query(
+            collection(db, 'orders'),
+            where('clientId', '==', clientId),
+            where('status', 'in', statusArray),
+            where('orderNo', '==', Number(term))
+          )));
+        }
+
+        // Prefix match — catches string orderNo docs that literally start with these digits
+        queries.push(getDocs(query(
+          collection(db, 'orders'),
+          where('clientId', '==', clientId),
+          where('status', 'in', statusArray),
+          where('orderNo', '>=', term),
+          where('orderNo', '<=', term + '\uf8ff'),
+          orderBy('orderNo'),
+          limit(50)
+        )));
+
+        const snapshots = await Promise.all(queries);
+        if (cancelled) return;
+
+        const merged = new Map();
+        snapshots.forEach(snap =>
+          snap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() }))
+        );
+        const list = Array.from(merged.values());
+
+        console.log(`[Orders] Global search "${term}" → ${list.length} match(es) (${isNumeric ? 'exact + prefix' : 'prefix only'} query, across all matching orders, capped at 50)`);
+        setSearchResults(list);
+      } catch (error) {
+        console.error('Global search error:', error.message);
+        if (!cancelled) setSearchResults([]);
+      } finally {
+        if (!cancelled) setSearchLoading(false);
+      }
+    };
+
+    runSearch();
+    return () => { cancelled = true; };
+  }, [debouncedSearch, filterKey, clientId, isAllOrders, statusFilter, refreshToken]);
 
   const handleUpdateStatus = async (order, newStatus) => {
     try {
       await updateDoc(doc(db, 'orders', order.id), { status: newStatus });
+      console.log(`[Orders] Status updated for ${order.orderNo} → ${newStatus}. Forcing a clean pagination refresh.`);
+      // The order may no longer belong in this filtered set (e.g. Active -> Confirmed
+      // while viewing the Active tab), so cached cursors are no longer trustworthy.
+      // Bumping refreshToken changes queryVersion, which the fetch effect detects
+      // as "new query" and resets to page 1 with a fresh cursor cache — this works
+      // correctly even if we were already sitting on page 1 (setCurrentPage(1)
+      // alone wouldn't re-trigger a fetch in that case since the value wouldn't change).
+      setRefreshToken(t => t + 1);
     } catch (err) {
       console.error('Status update failed', err);
     }
@@ -608,6 +762,15 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
         assignedExecutiveId: exec.id,
         assignedExecutiveName: exec.name,
       });
+      // Assignment doesn't change status, so it's safe to just patch local state
+      // instead of refetching. Patch whichever list is currently on screen —
+      // `orders` (normal browsing) or `searchResults` (search is active) —
+      // since displayData reads from `activeList`, not always `orders`.
+      const patch = o => o.id === selectedOrder.id
+        ? { ...o, assignedExecutiveId: exec.id, assignedExecutiveName: exec.name }
+        : o;
+      setOrders(prev => prev.map(patch));
+      setSearchResults(prev => prev ? prev.map(patch) : prev);
     } catch (err) {
       console.error('Assign executive failed', err);
     }
@@ -621,6 +784,11 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
         assignedExecutiveId: null,
         assignedExecutiveName: null,
       });
+      const patch = o => o.id === selectedOrder.id
+        ? { ...o, assignedExecutiveId: null, assignedExecutiveName: null }
+        : o;
+      setOrders(prev => prev.map(patch));
+      setSearchResults(prev => prev ? prev.map(patch) : prev);
     } catch (err) {
       console.error('Remove executive failed', err);
     }
@@ -628,12 +796,18 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   };
 
   const handleItemsPerPageChange = (size) => {
+    console.log(`[Orders] Page size changed → ${size}`);
     setItemsPerPage(size);
-    setCurrentPage(1);
   };
 
   const handlePageChange = (page) => {
-    setCurrentPage(Math.min(Math.max(1, page), totalPages));
+    const target = Math.min(Math.max(1, page), totalPages);
+    // Safe without extra reachability checks: the UI only exposes First (1),
+    // Previous (currentPage - 1), and Next (currentPage + 1). Since navigation
+    // is always sequential, cursorsRef.current already holds every cursor
+    // needed for any of these three targets by the time they're clickable.
+    console.log(`[Orders] Navigating to page ${target}`);
+    setCurrentPage(target);
   };
 
   const statusLabelLower = isAllOrders ? '' : String(statusFilter).toLowerCase();
@@ -653,28 +827,30 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
                   statusFilter === 'Cancelled' ? '#dc2626' : '#f59e0b',
             }]} />
             <Text style={styles.subHeading}>
-              {loading ? '…' : `${filteredOrders.length} ${filteredOrders.length === 1 ? 'order' : 'orders'} found`}
+              {loading && !isSearchActive
+                ? '…'
+                : isSearchActive
+                  ? (searchLoading ? 'Searching…' : `${(searchResults || []).length} match(es) for "${debouncedSearch}"`)
+                  : `${totalCount} ${totalCount === 1 ? 'order' : 'orders'} found`}
             </Text>
           </View>
         </View>
 
-        {!loading && (
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={16} color="#94a3b8" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search by order, vendor, train…"
-              placeholderTextColor="#94a3b8"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery ? (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={16} color="#94a3b8" />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        )}
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={16} color="#94a3b8" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search by order number (e.g. 10234)"
+            placeholderTextColor="#94a3b8"
+            value={searchInput}
+            onChangeText={setSearchInput}
+          />
+          {searchInput ? (
+            <TouchableOpacity onPress={() => { setSearchInput(''); setDebouncedSearch(''); }}>
+              <Ionicons name="close-circle" size={16} color="#94a3b8" />
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </View>
 
       {/* ── Table container ── */}
@@ -692,13 +868,13 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           <Text style={[styles.col, { flex: 1.2 }]}>DELIVERY EXEC</Text>
         </View>
 
-         {loading ? (
+         {(isSearchActive ? searchLoading : loading) ? (
            <SkeletonLoader />
-          ) : filteredOrders.length === 0 ? (
+          ) : displayData.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="receipt-outline" size={36} color="#cbd5e1" />
             <Text style={styles.emptyStateText}>
-              {searchQuery ? 'No orders match your search' : `No ${statusLabelLower} orders`}
+              {isSearchActive ? `No orders match "${debouncedSearch}"` : `No ${statusLabelLower} orders`}
             </Text>
           </View>
         ) : (
@@ -725,14 +901,25 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
               showsHorizontalScrollIndicator={false}
             />
 
-            {/* ── Pagination bar ── */}
-            <PaginationBar
-              currentPage={currentPage}
-              totalItems={totalItems}
-              itemsPerPage={itemsPerPage}
-              onPageChange={handlePageChange}
-              onItemsPerPageChange={handleItemsPerPageChange}
-            />
+            {/* ── Pagination bar (hidden during search — results are a capped
+                 top-50 match list across ALL matching orders, not a cursor-paginated page) ── */}
+            {isSearchActive ? (
+              (searchResults || []).length === 50 && (
+                <View style={styles.searchCapNotice}>
+                  <Text style={styles.searchCapNoticeText}>
+                    Showing top 50 matches — type more of the order number to narrow it down.
+                  </Text>
+                </View>
+              )
+            ) : (
+              <PaginationBar
+                currentPage={currentPage}
+                totalItems={totalCount}
+                itemsPerPage={itemsPerPage}
+                onPageChange={handlePageChange}
+                onItemsPerPageChange={handleItemsPerPageChange}
+              />
+            )}
           </>
         )}
       </View>
@@ -1083,4 +1270,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc', justifyContent: 'center', alignItems: 'center',
   },
   pageNavBtnDisabled: { borderColor: '#f1f5f9', backgroundColor: '#fafafa' },
+
+  // ── Search cap notice ──
+  searchCapNotice: {
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderTopWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fffbeb',
+  },
+  searchCapNoticeText: { fontSize: 12, color: '#b45309', fontWeight: '500', textAlign: 'center' },
 });
