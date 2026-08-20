@@ -47,6 +47,17 @@ const getDateHeaderLabel = (dateVal) => {
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
+// trainInfo is stored as "12431 - RAJDHANI EXPRESS", "12995 / BDTS AII SF EXP ...",
+// sometimes just "19218", etc. — the train number always leads. For display,
+// we only want that leading number (coach/seat are shown separately already),
+// so this strips everything after it. Falls back to the raw value if no
+// leading number is found, so nothing silently disappears.
+const getTrainNumber = (trainInfo) => {
+  if (!trainInfo) return 'N/A';
+  const match = String(trainInfo).match(/^\s*(\d+)/);
+  return match ? match[1] : trainInfo;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Expandable Order Row
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,7 +149,7 @@ const ExpandableOrderRow = ({ item, onUpdateStatus, onAssign }) => {
         <Text style={[styles.cell, { flex: 0.8, fontSize: 12, fontWeight: '500' }]}>{item.deliveryTime || '—'}</Text>
         <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={1}>{item.vendorName}</Text>
         <Text style={[styles.cell, { flex: 1.2 }]} numberOfLines={2}>
-          {item.trainInfo || 'N/A'}{' '}
+          {getTrainNumber(item.trainInfo)}{' '}
           <Text style={{ color: '#dc2626', fontWeight: '700' }}>
             ({item.coach || 'No Coach'}{item.seat ? ` / ${item.seat}` : ''})
           </Text>
@@ -669,26 +680,37 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   }, [searchInput]);
 
   // ── Global search across ALL matching orders (not just the loaded page) ──
-  // No extra field, no backfill. Searches the EXISTING `orderNo` field as-is.
+  // No extra field, no backfill. Searches the EXISTING `orderNo` AND
+  // `trainInfo` fields as-is, and merges results from both.
   //
-  // Why two queries: your orderNo values are mixed-type in Firestore —
-  // plain numbers for email-parsed orders, and strings like "HOM1024" /
-  // "PS2048" for the other two sources. Firestore can't range-match across
-  // two different field types in one query, so:
-  //   1) If the typed term is all digits, run an EXACT match against the
-  //      numeric-typed orderNo docs (where orderNo == Number(term)).
-  //   2) Always also run a PREFIX match against the string-typed orderNo
-  //      docs (where orderNo >= term && orderNo <= term + '\uf8ff').
-  //      This only matches string order numbers that literally start with
-  //      the typed digits — so "1024" won't currently match "HOM1024" or
-  //      "PS2048" (Firestore can't search inside a string). Once the HOM/PS
-  //      prefixes are removed from those orders, their orderNo becomes a
-  //      plain digit string and this same prefix query starts matching them
-  //      automatically — no code change needed at that point.
-  // Results from both queries are merged and de-duplicated by doc id.
+  // orderNo matching (two queries, same as before):
+  //   Your orderNo values are mixed-type in Firestore — plain numbers for
+  //   email-parsed orders, and strings like "HOM1024" / "PS2048" for the
+  //   other two sources. Firestore can't range-match across two different
+  //   field types in one query, so:
+  //     1) If the typed term is all digits, run an EXACT match against the
+  //        numeric-typed orderNo docs (where orderNo == Number(term)).
+  //     2) Always also run a PREFIX match against the string-typed orderNo
+  //        docs (where orderNo >= term && orderNo <= term + '\uf8ff').
+  //        This only matches string order numbers that literally start with
+  //        the typed digits — so "1024" won't currently match "HOM1024" or
+  //        "PS2048" (Firestore can't search inside a string). Once the HOM/PS
+  //        prefixes are removed from those orders, their orderNo becomes a
+  //        plain digit string and this same prefix query starts matching
+  //        them automatically — no code change needed at that point.
   //
-  // Requires the composite index: orders → clientId (Asc), status (Asc), orderNo (Asc)
-  // (this single index supports both the equality query and the prefix/range query above).
+  // trainInfo matching (one query):
+  //   trainInfo is always stored as a string starting with the train number
+  //   (e.g. "12431 - RAJDHANI...", "12995 / BDTS..."), so a PREFIX match
+  //   works directly — no type-mismatch issue like orderNo has. This matches
+  //   any order whose train number starts with the typed digits.
+  //
+  // Results from all queries are merged and de-duplicated by doc id, then
+  // capped at 50 combined.
+  //
+  // Requires TWO composite indexes:
+  //   orders → clientId (Asc), status (Asc), orderNo (Asc)
+  //   orders → clientId (Asc), status (Asc), trainInfo (Asc)
   useEffect(() => {
     let cancelled = false;
     const term = debouncedSearch.trim();
@@ -716,7 +738,7 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           )));
         }
 
-        // Prefix match — catches string orderNo docs that literally start with these digits
+        // Prefix match on orderNo — catches string orderNo docs that literally start with these digits
         queries.push(getDocs(query(
           collection(db, 'orders'),
           where('clientId', '==', clientId),
@@ -724,6 +746,17 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           where('orderNo', '>=', term),
           where('orderNo', '<=', term + '\uf8ff'),
           orderBy('orderNo'),
+          limit(50)
+        )));
+
+        // Prefix match on trainInfo — catches orders whose train number starts with these digits
+        queries.push(getDocs(query(
+          collection(db, 'orders'),
+          where('clientId', '==', clientId),
+          where('status', 'in', statusArray),
+          where('trainInfo', '>=', term),
+          where('trainInfo', '<=', term + '\uf8ff'),
+          orderBy('trainInfo'),
           limit(50)
         )));
 
@@ -736,7 +769,7 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
         );
         const list = Array.from(merged.values());
 
-        console.log(`[Orders] Global search "${term}" → ${list.length} match(es) (${isNumeric ? 'exact + prefix' : 'prefix only'} query, across all matching orders, capped at 50)`);
+        console.log(`[Orders] Global search "${term}" → ${list.length} match(es) across orderNo + trainInfo (${isNumeric ? 'exact + prefix' : 'prefix only'} on orderNo, prefix on trainInfo; across all matching orders, capped at 50)`);
         setSearchResults(list);
       } catch (error) {
         console.error('Global search error:', error.message);
@@ -858,7 +891,7 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           <Ionicons name="search" size={16} color="#94a3b8" />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search by order number (e.g. 10234)"
+            placeholder="Search by order no. or train no. (e.g. 10234)"
             placeholderTextColor="#94a3b8"
             value={searchInput}
             onChangeText={setSearchInput}
