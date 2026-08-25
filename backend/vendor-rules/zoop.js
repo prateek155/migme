@@ -148,7 +148,17 @@ const domConfig = {
     trainInfo: {
       labelText:   'Train',
       valuePrefix: ': ',
-      transform: v => v.trim() || null,
+      // Save ONLY the train number — discard the train name entirely.
+      // Raw value e.g. "Ddr Bkn Sf Exp/ 12490" or "Hsr Bdts Sf Exp/ 22916"
+      // (name may appear before OR after the number) → extract the 4-5 digit
+      // train number wherever it occurs in the string.
+      // Falls back to the trimmed raw value only if no number is found at all,
+      // so nothing silently disappears.
+      transform: v => {
+        const trimmed = v.trim();
+        const match = trimmed.match(/(\d{4,5})/);
+        return match ? match[1] : (trimmed || null);
+      },
     },
 
     coach: {
@@ -309,7 +319,13 @@ ALWAYS strip the leading ": " (colon + space) before using the value.
              Note: value cell may double-bold: <b>: </b><b>Prepaid</b> — textContent still ": Prepaid".
 - CUSTOMER:  "Customer Name" → strip ": ".
 - CONTACT:   "Phone" → strip ": " → 10-digit number. Strip +91/91 prefix if present.
-- TRAIN:     "Train" → strip ": " → full string e.g. "Hsr Bdts Sf Exp/ 22916".
+- TRAIN:     "Train" → strip ": " → extract ONLY the numeric train number (4-5 digits),
+             discard the train name completely. The number may appear before OR
+             after the name in the raw value — always extract just the digits.
+             e.g. ": Hsr Bdts Sf Exp/ 22916" → strip ": " → "Hsr Bdts Sf Exp/ 22916"
+                  → extract number → "22916"
+             e.g. ": Ddr Bkn Sf Exp/ 12490" → strip ": " → extract number → "12490"
+             e.g. ": 22946" (already just a number) → "22946"
 - COACH:     "Coach/ Seat" → strip ": " → normalize spaces around / → "B5/68".
              e.g. ": B5/ 68" → strip → "B5/ 68" → replace /\s*\/\s*/g with "/" → "B5/68"
 - DATE/TIME: Use "Delivery Date" (Row 4 RIGHT). NOT "ETA". Both hold the same value.
@@ -386,7 +402,7 @@ EXPECTED PARSE OUTPUT for ZO36317062087957
   paymentType   : "Prepaid"
   customerName  : "Ram Prakash"
   contactNo     : "7993415001"
-  trainInfo     : "Hsr Bdts Sf Exp/ 22916"
+  trainInfo     : "22916"
   coach         : "B5/68"
   deliveryDate  : "2026-06-03"
   deliveryTime  : "09:51"
