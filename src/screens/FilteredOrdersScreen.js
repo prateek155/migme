@@ -768,20 +768,23 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
           )),
 
           // Prefix match on trainInfo — catches orders whose train number starts with these digits.
-          // NOTE: Firestore only allows a range filter on ONE field per query, and this query
-          // already range-filters on trainInfo — so "today only" can't also be a query constraint
-          // here (that would be a second range field). It's applied as a client-side filter below
-          // instead. Train numbers repeat daily, so without this, an old order running the same
-          // train number would incorrectly show up in today's search.
-          getDocs(query(
-            collection(db, 'orders'),
-            where('clientId', '==', clientId),
-            where('status', 'in', statusArray),
-            where('trainInfo', '>=', term),
-            where('trainInfo', '<=', term + '\uf8ff'),
-            orderBy('trainInfo'),
-            limit(50)
-          )),
+          // FIX: earlier this only had orderBy('trainInfo'), so among same-trainInfo docs
+          // Firestore tie-broke by document ID (random w.r.t. date) — old orders could
+         // fill up the limit(50) before today's orders even got fetched. Adding a
+         // secondary orderBy('deliveryDate','desc') makes today's orders surface first
+        // within each trainInfo group, so the isToday() filter below actually finds them
+       // instead of them being cut off by the cap.
+      // Requires composite index: orders → clientId (Asc), status (Asc), trainInfo (Asc), deliveryDate (Desc)
+         getDocs(query(
+           collection(db, 'orders'),
+           where('clientId', '==', clientId),
+           where('status', 'in', statusArray),
+           where('trainInfo', '>=', term),
+           where('trainInfo', '<=', term + '\uf8ff'),
+           orderBy('trainInfo'),
+           orderBy('deliveryDate', 'desc'),
+           limit(50)
+         )),
         ]);
         if (cancelled) return;
 
