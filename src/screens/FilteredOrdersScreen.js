@@ -29,6 +29,15 @@ const toMillis = (val) => {
 
 const startOfDay = (dt) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
 
+// Used to restrict train-number search results to today's deliveries only —
+// see the search effect below for why this is a client-side filter rather
+// than a Firestore query constraint.
+const isToday = (dateVal) => {
+  const ms = toMillis(dateVal);
+  if (!ms) return false;
+  return startOfDay(new Date(ms)) === startOfDay(new Date());
+};
+
 const getDateKey = (dateVal) => {
   const ms = toMillis(dateVal);
   if (!ms) return 'no-date';
@@ -699,11 +708,21 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
   //        plain digit string and this same prefix query starts matching
   //        them automatically — no code change needed at that point.
   //
-  // trainInfo matching (one query):
+  // trainInfo matching (one query, then a client-side date filter):
   //   trainInfo is always stored as a string starting with the train number
   //   (e.g. "12431 - RAJDHANI...", "12995 / BDTS..."), so a PREFIX match
   //   works directly — no type-mismatch issue like orderNo has. This matches
   //   any order whose train number starts with the typed digits.
+  //   Train numbers repeat daily, so results are further restricted to only
+  //   TODAY's deliveryDate (client-side, after fetch — see the query below
+  //   for why this can't be a Firestore constraint in the same query).
+  //   orderNo matches are NOT date-restricted — an order number search should
+  //   still find that order regardless of when it was placed.
+  //   CAVEAT: since the date filter happens after fetching, if a very common
+  //   train-number prefix has 50+ matches from OTHER dates, today's match
+  //   could theoretically get pushed out of the capped 50 before the date
+  //   filter runs. In practice this only matters for very short/generic
+  //   search terms — typing more digits narrows it down.
   //
   // Results from all queries are merged and de-duplicated by doc id, then
   // capped at 50 combined.
@@ -726,50 +745,72 @@ export default function FilteredOrdersScreen({ statusFilter, title, clientId }) 
         const statusArray = isAllOrders ? statusFilter : [statusFilter];
         const isNumeric = /^\d+$/.test(term);
 
-        const queries = [];
-
-        if (isNumeric) {
+        const [orderNoExactSnap, orderNoPrefixSnap, trainInfoSnap] = await Promise.all([
           // Exact match — catches plain-number orderNo docs (email-parsed orders)
-          queries.push(getDocs(query(
+          isNumeric
+            ? getDocs(query(
+                collection(db, 'orders'),
+                where('clientId', '==', clientId),
+                where('status', 'in', statusArray),
+                where('orderNo', '==', Number(term))
+              ))
+            : Promise.resolve(null),
+
+          // Prefix match on orderNo — catches string orderNo docs that literally start with these digits
+          getDocs(query(
             collection(db, 'orders'),
             where('clientId', '==', clientId),
             where('status', 'in', statusArray),
-            where('orderNo', '==', Number(term))
-          )));
-        }
+            where('orderNo', '>=', term),
+            where('orderNo', '<=', term + '\uf8ff'),
+            orderBy('orderNo'),
+            limit(50)
+          )),
 
-        // Prefix match on orderNo — catches string orderNo docs that literally start with these digits
-        queries.push(getDocs(query(
-          collection(db, 'orders'),
-          where('clientId', '==', clientId),
-          where('status', 'in', statusArray),
-          where('orderNo', '>=', term),
-          where('orderNo', '<=', term + '\uf8ff'),
-          orderBy('orderNo'),
-          limit(50)
-        )));
-
-        // Prefix match on trainInfo — catches orders whose train number starts with these digits
-        queries.push(getDocs(query(
-          collection(db, 'orders'),
-          where('clientId', '==', clientId),
-          where('status', 'in', statusArray),
-          where('trainInfo', '>=', term),
-          where('trainInfo', '<=', term + '\uf8ff'),
-          orderBy('trainInfo'),
-          limit(50)
-        )));
-
-        const snapshots = await Promise.all(queries);
+          // Prefix match on trainInfo — catches orders whose train number starts with these digits.
+          // NOTE: Firestore only allows a range filter on ONE field per query, and this query
+          // already range-filters on trainInfo — so "today only" can't also be a query constraint
+          // here (that would be a second range field). It's applied as a client-side filter below
+          // instead. Train numbers repeat daily, so without this, an old order running the same
+          // train number would incorrectly show up in today's search.
+          getDocs(query(
+            collection(db, 'orders'),
+            where('clientId', '==', clientId),
+            where('status', 'in', statusArray),
+            where('trainInfo', '>=', term),
+            where('trainInfo', '<=', term + '\uf8ff'),
+            orderBy('trainInfo'),
+            limit(50)
+          )),
+        ]);
         if (cancelled) return;
 
         const merged = new Map();
-        snapshots.forEach(snap =>
-          snap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() }))
-        );
+
+        // orderNo matches are NOT date-restricted — searching by order number
+        // should still find that exact order regardless of which day it was placed.
+        if (orderNoExactSnap) {
+          orderNoExactSnap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() }));
+        }
+        orderNoPrefixSnap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() }));
+
+        // trainInfo matches ARE date-restricted to today — a train number search
+        // should only surface today's delivery running that train, not every past
+        // day this train number was ever used.
+        let trainMatchesTotal = 0;
+        let trainMatchesToday = 0;
+        trainInfoSnap.docs.forEach(d => {
+          trainMatchesTotal++;
+          const data = d.data();
+          if (isToday(data.deliveryDate)) {
+            trainMatchesToday++;
+            merged.set(d.id, { id: d.id, ...data });
+          }
+        });
+
         const list = Array.from(merged.values());
 
-        console.log(`[Orders] Global search "${term}" → ${list.length} match(es) across orderNo + trainInfo (${isNumeric ? 'exact + prefix' : 'prefix only'} on orderNo, prefix on trainInfo; across all matching orders, capped at 50)`);
+        console.log(`[Orders] Global search "${term}" → ${list.length} match(es). orderNo: ${(orderNoExactSnap?.docs.length || 0) + orderNoPrefixSnap.docs.length} (not date-restricted). trainInfo: ${trainMatchesToday}/${trainMatchesTotal} matched today's date (capped at 50 fetched per query).`);
         setSearchResults(list);
       } catch (error) {
         console.error('Global search error:', error.message);
