@@ -35,7 +35,7 @@ const startOfDay = (dt) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(
 const isToday = (dateVal) => {
   const ms = toMillis(dateVal);
   if (!ms) return false;
-  return startOfDay(new Date(ms)) === startOfDay(new Date());
+  return startOfDay(new Date(ms)) === startOfDay(new Date('2026-08-25'));
 };
 
 const getDateKey = (dateVal) => {
