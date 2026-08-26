@@ -2018,6 +2018,7 @@ async function sendNewOrderPush(clientId, orderData, tag) {
         .messaging()
         .sendEachForMulticast({
           tokens,
+          notification: { title, body },
           data: {
             type: "new_order",
             orderId: `${clientId}_${orderData.orderNo || ""}`,
@@ -2032,6 +2033,17 @@ async function sendNewOrderPush(clientId, orderData, tag) {
           },
           android: {
             priority: "high",
+            notification: {
+              channelId: "incoming_orders",
+              priority: "max",
+              visibility: "public",
+              category: "incoming_order",
+              sticky: false,
+              notificationPriority: "PRIORITY_MAX",
+            },
+          },
+          apns: {
+            payload: { aps: { sound: "default", badge: 1, category: "incoming_order" } },
           },
         });
       const failedTokens = [];
