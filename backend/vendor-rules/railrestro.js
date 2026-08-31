@@ -19,7 +19,16 @@
  *     render, but the ITEMS TABLE and FOOTER ROW markup are structurally identical
  *     between both samples. Keep both fixtures in the regression suite — #5676909
  *     specifically exercises "no Cashback row" + "extra outer table nesting".
- *   - Matching PDF exports of both orders (confirms no drift between HTML render and
+ *   - Real .eml  Order #5604719  (received 08 Jul 2026, forwarded 31 Aug 2026) — COD,
+ *     Cashback row present (Rs. 0.00), footer ends "Payable Total:" → "(Amount to
+ *     collect)" = Rs. 378 (same as Payable Total).
+ *   - Real .eml  Order #5807267  (received 31 Aug 2026, forwarded 31 Aug 2026) — PREPAID,
+ *     Cashback row present (Rs. 0.00), footer has an EXTRA "Prepaid:" row (plain <td>
+ *     label) before the final row, whose label is "Paid Total:" (not "Payable Total:"),
+ *     and "(Amount to collect)" = Rs. 0/- (NOT equal to Paid Total). This is the sample
+ *     that proves RailRestro DOES distinguish COD vs Prepaid — see PAYMENT TYPE v3 FIX
+ *     below; the old "always COD" assumption is now confirmed wrong and replaced.
+ *   - Matching PDF exports of all four orders (confirms no drift between HTML render and
  *     what the vendor visually sees)
  *
  * DOM PARSING: PATH A — domConfig below.
@@ -66,10 +75,84 @@
  * Also note: order #5676909 has NO "Cashback:" row at all (unlike #5587956).
  * The footer-row loop must not assume a fixed 7-row footer — it must keep
  * consuming rows generically until the tbody ends, regardless of which of the
- * 7 known labels are actually present. Do not index into footer rows by
+ * known labels are actually present. Do not index into footer rows by
  * position; always key by normalized label text.
  *
- * ── HTML LAYOUT (confirmed from live .eml, both samples) ───────────────────
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PAYMENT TYPE — v3 FIX (root-caused from orders #5604719 vs #5807267)
+ * ═══════════════════════════════════════════════════════════════════════════
+ * OLD (WRONG) ASSUMPTION: "every sample renders '(Amount to collect)', so
+ * paymentType is always COD, no Prepaid sample has been seen." This is FALSE.
+ * Order #5807267 IS a Prepaid order and the vendor template clearly marks it
+ * as such — the "always COD" shortcut in the old postProcess()
+ * (`fm['amount to collect'] != null ? 'COD' : 'COD'`) is a no-op bug that
+ * hides this distinction. It must be replaced with real branching logic.
+ *
+ * How to tell COD apart from Prepaid, from the footer alone:
+ *
+ *   COD order (#5604719, #5587956, #5676909):
+ *     ... Extra Charges: | Cashback: (optional) | Payable Total: (label in <th>)
+ *     | (Amount to collect): Rs. 378   ← EQUAL to Payable Total
+ *
+ *   Prepaid order (#5807267):
+ *     ... Extra Charges: | Cashback: (optional) | Prepaid: Rs. 487.2 (label in
+ *     plain <td>, NEW row not present on COD orders) | Paid Total: (label in
+ *     <th>, replaces "Payable Total:") Rs. 487.2 | (Amount to collect): Rs. 0/-
+ *     ← ZERO, because nothing is left to collect on delivery
+ *
+ * Two independent, reinforcing signals — use BOTH:
+ *   (a) footerMap has a 'prepaid' key at all            → order is Prepaid
+ *   (b) footerMap's final-row label is 'paid total'
+ *       instead of 'payable total'                       → order is Prepaid
+ *   Fallback / cross-check: 'amount to collect' == 0     → order is Prepaid
+ *                            'amount to collect' > 0      → order is COD
+ *   If signals ever disagree, trust (a)/(b) — label text is the vendor's own
+ *   explicit statement of payment type, the ₹0 amount is just a consequence.
+ *
+ * RULE (v3):
+ *   order.paymentType = ('prepaid' in footerMap || 'paid total' in footerMap)
+ *                        ? 'Paid'
+ *                        : 'COD';
+ *
+ * This replaces the old hardcoded-COD placeholder. Because "Paid Total" and
+ * "Prepaid" only ever appear together in the samples seen, either one alone
+ * is sufficient, but check both for resilience in case the vendor ever ships
+ * only one of the two rows.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TOTAL / COLLECTION AMOUNT — v3 FIX
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Requirement: the "amount to collect" figure must ALWAYS be surfaced as-is
+ * (Rs. 378 for COD, Rs. 0 for Prepaid) — it must never be silently dropped or
+ * overwritten by a fallback chain the way totalAmount is.
+ *
+ * At the same time, collapsing everything into a single field named
+ * `totalAmount` that sometimes means "what the order is worth" (COD) and
+ * sometimes means "₹0, nothing to collect" (Prepaid) is a footgun for any
+ * caller that treats totalAmount as "the order's value" (billing, reporting,
+ * reconciliation, etc.) — a Prepaid order would incorrectly show as a ₹0
+ * order. So this file now exposes TWO fields instead of one:
+ *
+ *   order.totalAmount     → the order's actual final value, from
+ *                            Paid Total → Payable Total → Amount to collect →
+ *                            Subtotal → Total (first non-null/non-zero hit).
+ *                            For #5604719 (COD) = 378. For #5807267 (Prepaid)
+ *                            = 487.2. This is what the order is WORTH.
+ *
+ *   order.amountToCollect → ALWAYS taken directly from the footer's
+ *                            "(Amount to collect)" row, with no fallback
+ *                            substitution. This is what the delivery agent
+ *                            must physically collect in cash: 378 for COD,
+ *                            0 for Prepaid. If this row is ever missing
+ *                            (should not happen per samples seen), the value
+ *                            is null rather than silently guessed.
+ *
+ * Keep both — a caller that only wants "collect Rs. X on delivery" reads
+ * amountToCollect directly (378 / 0); a caller that wants "what is this
+ * order worth" reads totalAmount (378 / 487.2). Do not merge them back into
+ * one field, since that is exactly the ambiguity that caused this fix.
+ *
+ * ── HTML LAYOUT (confirmed from live .eml, all four samples) ───────────────
  *
  * No <thead>/<tbody> semantic split for the order-info block — it is plain
  * running text with <br> tags inside a single <td>, NOT split across TH cells
@@ -111,7 +194,7 @@
  *       [3] row total as "Rs. 215"
  *
  *     footer rows — NOT uniform. Column count varies per row because some cells
- *     use colspan="2" as a spacer instead of two empty <td>s, AND two rows use
+ *     use colspan="2" as a spacer instead of two empty <td>s, AND some rows use
  *     <th> instead of <td> for the label cell:
  *       Total:               → 4 plain <td> cells: [empty, empty, "Total:", "Rs. 536"]
  *       GST:                 → same 4-cell shape
@@ -120,8 +203,19 @@
  *       Cashback:            → 3 cells: [<td colspan="2"> spacer, "Cashback:", "Rs. 0.00"]
  *                               (OPTIONAL — absent entirely in order #5676909;
  *                               do not assume this row exists)
- *       Payable Total:       → 3 cells: [<td colspan="2"> spacer, <th>Payable Total:</th>, value]
- *       (Amount to collect): → 3 cells: [<td colspan="2"> spacer, <th><small>(Amount to collect)</small></th>, value]
+ *       Prepaid:              → 3 cells: [<td colspan="2"> spacer, "Prepaid:", value]
+ *                               (OPTIONAL — ONLY present on Prepaid orders, e.g.
+ *                               #5807267; absent on every COD order seen. Label is
+ *                               a plain <td>, not <th>.)
+ *       Payable Total:        → 3 cells: [<td colspan="2"> spacer, <th>Payable Total:</th>, value]
+ *                               (COD orders only — see "Paid Total" below for the
+ *                               Prepaid equivalent; the two labels are mutually
+ *                               exclusive, never both present on the same order)
+ *       Paid Total:            → 3 cells: [<td colspan="2"> spacer, <th>Paid Total:</th>, value]
+ *                               (Prepaid orders only, replaces "Payable Total:")
+ *       (Amount to collect):  → 3 cells: [<td colspan="2"> spacer, <th><small>(Amount to collect)</small></th>, value]
+ *                               (always present; equals Payable/Paid Total for
+ *                               COD, is Rs. 0/- for Prepaid)
  *
  *     Because the spacer/label pattern is inconsistent AND the label tag itself
  *     varies (td vs th), footer rows must be detected generically: take the
@@ -131,7 +225,7 @@
  *         const cells = row.find('td, th');   // ← MUST include th, see BUG note above
  *
  *     Second-to-last = label, last = value. This works uniformly across all
- *     rows seen in both verified samples (6 rows in #5676909, 7 in #5587956).
+ *     rows seen across all four verified samples.
  *
  * ── KEY PARSING RULES ──────────────────────────────────────────────────────
  *
@@ -144,7 +238,9 @@
  *   "Customer: jimal pithadiya  M. 9979867233" — name and 10-digit mobile are
  *   on the same line, phone always immediately follows "M." with no other
  *   digit sequence in between. Confirmed again on #5676909: "Customer: Dhiraj
- *   M. 9079354819" — single-word names work fine with the same regex.
+ *   M. 9079354819" — single-word names work fine with the same regex. Also
+ *   confirmed on #5604719 ("Israr malik M. 7083730144") and #5807267
+ *   ("Vaibhav Solanki M. 9558055764").
  *
  * TRAIN:
  *   "TRAIN: 20923 / GIMB HUMSAFAR" — number / name, same convention as other
@@ -176,32 +272,18 @@
  *   Same discipline as other vendors: Price × Qty ≈ row Total (tolerance ±1).
  *   Verified on #5587956: 215×1=215 ✓, 360×1=360 ✓, 45×4=180 ✓.
  *   Verified on #5676909: 165×1=165 ✓, 371×1=371 ✓.
+ *   Verified on #5604719: 360×1=360 ✓.
+ *   Verified on #5807267: 149×1=149 ✓, 237×1=237 ✓, 26×3=78 ✓.
  *
  * PAYMENT TYPE:
- *   *** ASSUMPTION — only COD samples seen so far, flag for confirmation ***
- *   Both verified samples render a "(Amount to collect)" footer line, and both
- *   are COD. No sample of a Prepaid RailRestro order has been seen yet to
- *   confirm whether that line disappears (or changes wording) for online-paid
- *   orders. Current rule: presence of "(Amount to collect)" → paymentType =
- *   "COD". If a Prepaid sample surfaces, update this rule — do not assume COD
- *   blindly once a counter-example exists.
+ *   See "PAYMENT TYPE — v3 FIX" block above. Derived from footerMap:
+ *   'prepaid' or 'paid total' key present → 'Paid'; otherwise → 'COD'.
  *
- * TOTAL AMOUNT:
- *   Footer has FIVE-OR-SIX numeric lines depending on whether Cashback is
- *   present: Total (pre-GST item sum), GST, Subtotal (Total+GST), Extra
- *   Charges, [Cashback — optional], Payable Total, then a final duplicate
- *   "(Amount to collect)" line.
- *   Use "Payable Total" as totalAmount — it is Subtotal adjusted for Extra
- *   Charges and Cashback, i.e. the true final figure. Extra Charges/Cashback
- *   are 0 in both samples seen so far, so Payable Total == Subtotal ==
- *   Amount to collect in practice, but Payable Total is the correct field to
- *   trust if those are ever non-zero.
- *   Fallback order if a field is ever missing: Payable Total → Amount to
- *   collect → Subtotal → Total.
- *   ⚠ This fallback chain existing in this spec is NOT sufficient — order
- *   #5676909 showed a live parser skip it entirely and surface ₹0. Confirm the
- *   deployed code actually executes this chain against `_footerMap`, not just
- *   a single hardcoded label lookup.
+ * TOTAL AMOUNT / AMOUNT TO COLLECT:
+ *   See "TOTAL / COLLECTION AMOUNT — v3 FIX" block above. Two fields:
+ *     totalAmount     = order's actual value (fallback chain, never forced to 0)
+ *     amountToCollect = footer's literal "Amount to collect" figure, always
+ *                        surfaced as-is (378 for COD, 0 for Prepaid), no fallback.
  */
 
 const domConfig = {
@@ -286,7 +368,8 @@ const domConfig = {
       },
     },
 
-    // totalAmount / paymentType are resolved in postProcess from footer data.
+    // totalAmount / amountToCollect / paymentType are resolved in postProcess
+    // from footer data — see fields listed there.
   },
 
   itemsTable: {
@@ -298,7 +381,7 @@ const domConfig = {
      *
      *   const itemsTable = $('th:contains("Item Name")').closest('table');
      *
-     * CONFIRMED column indexes (0-based) from both live .eml samples:
+     * CONFIRMED column indexes (0-based) from all four live .eml samples:
      *   0=Item Name  1=Price  2=Quantity  3=Total
      * No description column — item name is always a single clean field.
      */
@@ -313,8 +396,10 @@ const domConfig = {
 
     itemCellSplit: null, // item name is clean text, no split needed
 
-    // Money cells render as "Rs. 215" / "Rs. 792.75" — strip "Rs." and commas.
+    // Money cells render as "Rs. 215" / "Rs. 792.75" / "Rs. 0/-" — strip
+    // "Rs.", commas, and any trailing "/-" before parseFloat.
     moneyPrefix: /^Rs\.?\s*/i,
+    moneySuffix: /\/-\s*$/,
 
     /**
      * FOOTER ROWS — variable cell count (colspan spacer inconsistency, see
@@ -333,16 +418,24 @@ const domConfig = {
      * parentheses/"small" wrapper text so "(Amount to collect)" and
      * "Amount to collect" both key to the same normalized string.
      *
-     * Do not assume all 7 possible footer labels are present — Cashback is
-     * confirmed OPTIONAL (absent in #5676909). Loop must run until the tbody
-     * ends, not for a fixed row count.
+     * Do not assume all footer labels are present — Cashback is confirmed
+     * OPTIONAL (absent in #5676909), and Prepaid/Paid Total vs Payable Total
+     * are MUTUALLY EXCLUSIVE (only one pair ever appears per order — see v3
+     * FIX above). Loop must run until the tbody ends, not for a fixed row
+     * count, and must not assume any particular pair of labels is present.
      */
     footerLabels: [
       'Total', 'GST', 'Subtotal', 'Extra Charges',
-      'Cashback', 'Payable Total', 'Amount to collect',
+      'Cashback', 'Prepaid', 'Payable Total', 'Paid Total', 'Amount to collect',
     ],
     footerCellSelector: 'td, th', // v2 FIX — was implicitly 'td' only, missed th-based labels
-    optionalFooterLabels: ['Cashback', 'Extra Charges'], // confirmed can be absent
+    optionalFooterLabels: [
+      'Cashback', 'Extra Charges',
+      // v3 FIX: Prepaid/Payable Total/Paid Total are each individually
+      // optional too — exactly one of {Payable Total} or {Prepaid + Paid
+      // Total} will be present per order, never both, never neither.
+      'Prepaid', 'Payable Total', 'Paid Total',
+    ],
 
     // No single captureFooterTotal like Rajbhog — RailRestro's totalAmount
     // needs the fallback chain below because "Total:" here is the PRE-GST
@@ -381,28 +474,55 @@ const domConfig = {
       }
     }
 
-    // ── totalAmount: Payable Total → Amount to collect → Subtotal → Total ──
-    // v2 FIX: this chain MUST actually execute against _footerMap. Order
-    // #5676909 proved a deployed variant of this file returned ₹0 for every
-    // billing field instead of falling through this chain — verify each
-    // step below is genuinely reached, not short-circuited by a prior
-    // hardcoded "Payable Total only" lookup elsewhere in the caller.
     const fm = order._footerMap || {};
+
+    // Parses a footer value like "Rs. 378" / "Rs. 0.00" / "Rs. 0/-" to a
+    // number. Unlike `pick()` below, this does NOT skip zero — a Prepaid
+    // order's "Amount to collect" is legitimately 0 and must be preserved,
+    // not treated as "missing, try the next fallback".
+    const toNumber = (raw) => {
+      if (raw == null) return null;
+      const n = parseFloat(
+        String(raw).replace(/rs\.?/i, '').replace(/,/g, '').replace(/\/-\s*$/, '').trim()
+      );
+      return isNaN(n) ? null : n;
+    };
+
+    // ── totalAmount: the order's actual final VALUE (never forced to 0) ────
+    // v3 FIX: "Paid Total" (Prepaid orders) now comes before "Payable Total"
+    // (COD orders) in the fallback chain, since the two are mutually
+    // exclusive per order — whichever is present is the correct final figure.
+    // v2 FIX carried forward: this chain MUST actually execute against
+    // _footerMap, not be short-circuited by a single hardcoded lookup —
+    // order #5676909 proved a deployed variant of this file skipped it.
     const pick = (...keys) => {
       for (const k of keys) {
-        const raw = fm[k];
-        if (raw == null) continue;
-        const n = parseFloat(String(raw).replace(/rs\.?/i, '').replace(/,/g, '').trim());
-        if (!isNaN(n) && n > 0) return n;
+        const n = toNumber(fm[k]);
+        if (n != null && n > 0) return n;
       }
       return null;
     };
-    order.totalAmount = pick('payable total', 'amount to collect', 'subtotal', 'total');
+    order.totalAmount = pick(
+      'paid total', 'payable total', 'amount to collect', 'subtotal', 'total'
+    );
 
-    // ── paymentType: presence of "Amount to collect" → COD ─────────────────
-    // See ASSUMPTION note in header comment — revisit if a Prepaid sample
-    // ever surfaces without this line.
-    order.paymentType = fm['amount to collect'] != null ? 'COD' : 'COD';
+    // ── amountToCollect: ALWAYS the literal "Amount to collect" footer
+    //    value, with NO fallback substitution. 378 for COD orders, 0 for
+    //    Prepaid orders (#5807267 confirmed). This is what must be handed to
+    //    the delivery agent in cash, and it must be trustworthy even when
+    //    it's legitimately zero — do not run it through `pick()`, which
+    //    treats 0 as "missing" and would incorrectly skip to another field.
+    order.amountToCollect = toNumber(fm['amount to collect']);
+
+    // ── paymentType — v3 FIX: replaces the old always-COD placeholder.
+    //    'prepaid' and/or 'paid total' present in the footer → Paid.
+    //    Neither present (only 'payable total') → COD.
+    //    Cross-check available if ever needed: amountToCollect === 0 implies
+    //    Paid; amountToCollect > 0 implies COD. The label-based check above
+    //    is preferred since it's the vendor's explicit statement, not an
+    //    inference from a derived number.
+    order.paymentType =
+      (fm['prepaid'] != null || fm['paid total'] != null) ? 'Paid' : 'COD';
 
     delete order._footerMap;
 
@@ -431,18 +551,21 @@ const domConfig = {
 //      Read item rows from itemsTable.find('tbody tr') as before.
 //
 //   4. Items table — money parsing:
-//      Apply itemsTable.moneyPrefix when reading 'price' and 'amountCol'
-//      columns: cells.eq(idx).text().replace(moneyPrefix, '').replace(/,/g,'').trim()
+//      Apply itemsTable.moneyPrefix / moneySuffix when reading 'price' and
+//      'amountCol' columns AND any footer value: cells.eq(idx).text()
+//        .replace(moneyPrefix, '').replace(moneySuffix, '').replace(/,/g,'').trim()
+//      moneySuffix handles the Prepaid order's "(Amount to collect) Rs. 0/-"
+//      formatting (#5807267) — a trailing "/-" with no numeric meaning.
 //
 //   5. Items table — footer rows (variable cell count AND variable tag type)
 //      — v2 FIX (root-caused from #5676909):
 //      Do NOT use Rajbhog's "colspan >= 2 on first cell" footer detector, and
-//      do NOT collect cells with `row.find('td')` alone — two of the footer
-//      rows ("Payable Total:", "(Amount to collect)") put their label inside
-//      a <th>, not a <td>. A td-only selector silently drops the label and
-//      corrupts _footerMap for exactly those two keys, which is what caused
-//      totalAmount to resolve to ₹0 on order #5676909 instead of falling
-//      back to Subtotal/Total.
+//      do NOT collect cells with `row.find('td')` alone — some footer rows
+//      ("Payable Total:", "Paid Total:", "(Amount to collect)") put their
+//      label inside a <th>, not a <td>. A td-only selector silently drops the
+//      label and corrupts _footerMap for exactly those keys, which is what
+//      caused totalAmount to resolve to ₹0 on order #5676909 instead of
+//      falling back to Subtotal/Total.
 //      Once item rows are exhausted, for each remaining <tr>:
 //        cells = row.find('td, th')          // ← must include th
 //        if (cells.length < 2) continue
@@ -451,21 +574,25 @@ const domConfig = {
 //        order._footerMap[label] = value
 //      normalize(): lowercase, strip trailing ':', strip '(' ')' and any
 //      "<small>" wrapper text so "(Amount to collect)" → "amount to collect".
-//      Do not assume a fixed number of footer rows — Cashback is optional
-//      and was absent entirely in #5676909.
+//      Do not assume a fixed number of footer rows — Cashback is optional,
+//      and "Prepaid"+"Paid Total" replace "Payable Total" wholesale on
+//      Prepaid orders (see PAYMENT TYPE v3 FIX above) rather than being
+//      simply appended.
 //
 //   6. Items table — qty cross-check via _amount:
 //      Same pattern as Rajbhog: capture amountCol as item._amount (after
 //      stripping "Rs." / commas) for each item row; postProcess validates.
 //
-//   7. totalAmount fallback chain — v2 FIX:
-//      Confirm postProcess's pick('payable total', 'amount to collect',
-//      'subtotal', 'total') chain is the ACTUAL code path used in production,
-//      not just documented here. Add a unit test against the #5676909 fixture
-//      (Payable Total/Amount-to-collect both missing due to a simulated
-//      td-only selector) asserting totalAmount still resolves to 562.8 via
-//      the Subtotal fallback — this is the regression test that would have
-//      caught the bug before it shipped.
+//   7. totalAmount / amountToCollect / paymentType — v3 FIX:
+//      Confirm postProcess's pick('paid total', 'payable total',
+//      'amount to collect', 'subtotal', 'total') chain, the standalone
+//      amountToCollect assignment (no fallback, zero preserved), and the
+//      paymentType branch (prepaid/paid total present → 'Paid', else 'COD')
+//      are the ACTUAL code paths used in production. Add unit tests against
+//      BOTH the #5604719 fixture (expect totalAmount=378, amountToCollect=378,
+//      paymentType='COD') AND the #5807267 fixture (expect totalAmount=487.2,
+//      amountToCollect=0, paymentType='Paid') — these are the regression
+//      tests that would catch a silent revert to the old "always COD" bug.
 //
 //   8. Cleanup:
 //      After all fields processed, delete order._infoBlock and order._footerMap.
@@ -481,16 +608,19 @@ const domConfig = {
 //   the cheerio/DOM step and match directly against the decoded text/plain
 //   body). Confirmed again on #5676909's text/plain part, including the
 //   Payable Total / Amount to collect lines rendering as clean plain text
-//   there even though the HTML part hides them in <th> tags — this makes the
-//   text/plain part a genuinely useful FIRST fallback (not just last-resort)
-//   specifically for the totalAmount fields if the td/th HTML bug above ever
-//   regresses. Could be wired as a PATH A' fallback if desired.
+//   there even though the HTML part hides them in <th> tags, and on
+//   #5807267's text/plain part, where "Prepaid:" / "Paid Total:" also render
+//   as clean plain text — this makes the text/plain part a genuinely useful
+//   FIRST fallback (not just last-resort) specifically for the
+//   totalAmount/amountToCollect/paymentType fields if the td/th HTML bug
+//   above ever regresses. Could be wired as a PATH A' fallback if desired.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const matchers = [
   { match: 'railrestro',      name: 'RailRestro', type: 'railrestro' },
   { match: 'rail restro',     name: 'RailRestro', type: 'railrestro' },
   { match: 'no-reply@railrestro.com', name: 'RailRestro', type: 'railrestro' },
+  { match: 'prateekagrawal120@gmail.com', name: 'RailRestro', type: 'railrestro' },
 ];
 
 const type = 'railrestro';
@@ -534,35 +664,68 @@ suspected secondary cause of the #5676909 totals bug. 4 columns
 
 QUANTITY CROSS-CHECK (mandatory):
   Price × Qty = Total (tolerance ±1). Verified: 215×1=215 ✓, 360×1=360 ✓, 45×4=180 ✓
-  (order #5587956); 165×1=165 ✓, 371×1=371 ✓ (order #5676909).
+  (order #5587956); 165×1=165 ✓, 371×1=371 ✓ (order #5676909); 360×1=360 ✓
+  (order #5604719); 149×1=149 ✓, 237×1=237 ✓, 26×3=78 ✓ (order #5807267).
 
 FOOTER ROWS (cell count is INCONSISTENT — some rows use two empty <td>s as
-spacers, others use one <td colspan="2">, and TWO of them use <th> instead
-of <td> for the label: "Payable Total:" and "(Amount to collect)"). Do not
-assume a fixed column index, a fixed colspan check, or a td-only selector —
-a td-only selector is a CONFIRMED BUG (see order #5676909, where it caused
-totalAmount to resolve to ₹0). Cell collector MUST be \`row.find('td, th')\`.
-Take the row's LAST TWO cells (of either tag) regardless of total cell count:
-second-to-last = label, last = value.
-  Total:                | Rs. 755     ← pre-GST item sum, NOT the final figure
-  GST:                  | Rs. 37.75
-  Subtotal:             | Rs. 792.75  ← Total + GST
-  Extra Charges:        | Rs. 0
-  Cashback:              | Rs. 0.00    ← OPTIONAL row, confirmed absent on #5676909
-  Payable Total:         | Rs. 792.75  ← use this as totalAmount, label is in a <th>
-  (Amount to collect):   | Rs. 792.75  ← duplicate of Payable Total, COD confirmation, label is in a <th>
+spacers, others use one <td colspan="2">, and some use <th> instead of <td>
+for the label: "Payable Total:", "Paid Total:", and "(Amount to collect)".
+Do not assume a fixed column index, a fixed colspan check, or a td-only
+selector — a td-only selector is a CONFIRMED BUG (see order #5676909, where
+it caused totalAmount to resolve to ₹0). Cell collector MUST be
+\`row.find('td, th')\`. Take the row's LAST TWO cells (of either tag)
+regardless of total cell count: second-to-last = label, last = value.
 
-TOTAL AMOUNT:
-  Use "Payable Total" (fallback chain if missing: Amount to collect → Subtotal → Total).
-  This is Subtotal adjusted for Extra Charges and Cashback — the true final figure,
-  even though in most orders seen so far Extra Charges and Cashback are both 0.
-  CONFIRM the fallback chain actually executes in the deployed parser — order
-  #5676909 showed a live variant of this parser return ₹0 instead of falling
-  back to Subtotal (₹562.8) or Total (₹536), both of which were present and
-  correctly formatted plain-<td> rows.
+  COD order footer (e.g. #5604719):
+    Total:                | Rs. 360     ← pre-GST item sum, NOT the final figure
+    GST:                  | Rs. 18
+    Subtotal:             | Rs. 378     ← Total + GST
+    Extra Charges:        | Rs. 0
+    Cashback:              | Rs. 0.00    ← OPTIONAL row, confirmed absent on #5676909
+    Payable Total:         | Rs. 378     ← final order value, label is in a <th>
+    (Amount to collect):   | Rs. 378     ← EQUAL to Payable Total, label is in a <th>
 
-PAYMENT TYPE (ASSUMPTION — only COD samples seen so far, revisit if contradicted):
-  Every sample seen renders "(Amount to collect)" → treat as paymentType = "COD".
-  No Prepaid RailRestro sample has been confirmed yet.`;
+  Prepaid order footer (e.g. #5807267) — has an EXTRA "Prepaid:" row and the
+  final label reads "Paid Total:" instead of "Payable Total:":
+    Total:                | Rs. 464
+    GST:                  | Rs. 23.2
+    Subtotal:             | Rs. 487.2
+    Extra Charges:        | Rs. 0
+    Cashback:              | Rs. 0.00
+    Prepaid:               | Rs. 487.2   ← NEW row, plain <td> label, COD orders never have this
+    Paid Total:            | Rs. 487.2   ← final order value, label is in a <th>, replaces "Payable Total:"
+    (Amount to collect):   | Rs. 0/-     ← ZERO here — nothing left to collect on delivery
+
+  "Payable Total" and "Prepaid"/"Paid Total" are MUTUALLY EXCLUSIVE per order:
+  a COD order never has "Prepaid:"/"Paid Total:", a Prepaid order never has
+  "Payable Total:". Use whichever pair is present to derive both totalAmount
+  and paymentType (see below) — do not assume "Payable Total" always exists.
+
+PAYMENT TYPE (v3 — REPLACES the old "always COD" assumption, now disproven
+by order #5807267, a confirmed real Prepaid sample):
+  footerMap has 'prepaid' or 'paid total' → paymentType = "Paid".
+  footerMap has 'payable total' (and no 'prepaid'/'paid total') → paymentType = "COD".
+  Cross-check: amountToCollect == 0 implies Paid; amountToCollect > 0 implies
+  COD — but trust the label-based rule above as primary, since it is the
+  vendor's own explicit statement rather than an inference.
+
+TOTAL AMOUNT vs AMOUNT TO COLLECT (v3 — two separate fields, do not merge):
+  totalAmount = the order's actual final value. Fallback chain: Paid Total →
+    Payable Total → Amount to collect → Subtotal → Total (first present,
+    non-zero value). This is Subtotal adjusted for Extra Charges/Cashback —
+    the true worth of the order regardless of payment method.
+    #5604719 (COD) → totalAmount = 378. #5807267 (Prepaid) → totalAmount = 487.2.
+  amountToCollect = ALWAYS the literal "(Amount to collect)" footer value,
+    taken as-is with NO fallback substitution — this must be allowed to be 0
+    (Prepaid orders) rather than treated as "missing" and replaced by another
+    figure. #5604719 (COD) → amountToCollect = 378. #5807267 (Prepaid) →
+    amountToCollect = 0.
+  Rationale for keeping both fields: a single "totalAmount" that means "order
+  value" for COD but "₹0, nothing owed" for Prepaid is ambiguous and breaks
+  any billing/reporting caller that reads it as "what the order is worth" —
+  a Prepaid order would incorrectly look like a free/₹0 order. Keeping
+  totalAmount = order value and amountToCollect = cash-on-delivery figure
+  gives correct answers for both "what did this order cost" and "what does
+  the delivery agent collect" without one silently overwriting the other.`;
 
 module.exports = { matchers, type, rule, domConfig };
