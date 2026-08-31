@@ -1414,7 +1414,7 @@ function parseDomOrder(htmlBody, vendorName, vendorType, domConfig, tag) {
           }
           return;
         }
-        return false;
+        return;
       }
 
       const _rawItemText = cells
