@@ -220,9 +220,6 @@ const domConfig = {
 const matchers = [
   { match: 'rajdhaniorder@gmail.com', name: 'Rajdhani Online Food', type: 'rajdhani' },
   { match: 'rajdhani',                name: 'Rajdhani Online Food', type: 'rajdhani' },
-
-  // >>> TEMP TEST SENDER — remove this single entry once testing is done <<<
-  { match: '1972vragrawal@gmail.com', name: 'Rajdhani Online Food', type: 'rajdhani' },
 ];
 
 const type = 'rajdhani';
