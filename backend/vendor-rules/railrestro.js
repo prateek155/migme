@@ -620,7 +620,6 @@ const matchers = [
   { match: 'railrestro',      name: 'RailRestro', type: 'railrestro' },
   { match: 'rail restro',     name: 'RailRestro', type: 'railrestro' },
   { match: 'no-reply@railrestro.com', name: 'RailRestro', type: 'railrestro' },
-  { match: 'prateekagrawal120@gmail.com', name: 'RailRestro', type: 'railrestro' },
 ];
 
 const type = 'railrestro';
