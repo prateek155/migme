@@ -245,6 +245,7 @@ const domConfig = {
 
 const matchers = [
   { match: "brotherbyte.com", name: "BrotherByte", type: "brotherbyte" },
+  { match: "1972vragrawal@gmail.com", name: "BrotherByte", type: "brotherbyte" },
 ];
 
 const type = "brotherbyte";
