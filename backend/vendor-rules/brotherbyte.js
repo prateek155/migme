@@ -117,9 +117,9 @@ const domConfig = {
       transform: (v) => v.trim(),
     },
 
-    // "12909/NZM GARIB RATH" -> "12909/NZM GARIB RATH"
+    // "12909/NZM GARIB RATH" -> trainInfo "12909" (number only, name dropped)
     trainInfo: {
-      match: /^(\d+\/[A-Z0-9 ]+)$/,
+      match: /^(\d+)\/[A-Z0-9 ]+$/,
       transform: (v) => v.trim(),
     },
 
@@ -163,6 +163,13 @@ const domConfig = {
     // distinguishes it from the date line "09-01-2026 ...").
     itemsRaw: {
       match: /^\d+-(?!\d).+$/,
+      transform: (v) => v.trim(),
+    },
+
+    // "Payment Method" value line — e.g. "Cash On Delivery", "Online",
+    // "Prepaid", "Paid", "COD". Normalized to COD/Prepaid in postProcess().
+    paymentTypeRaw: {
+      match: /^(Cash\s*On\s*Delivery|COD|Online|Prepaid|Paid)$/i,
       transform: (v) => v.trim(),
     },
   },
@@ -226,13 +233,18 @@ const domConfig = {
     order.totalAmount = amountToCollect || orderTotal;
     order.remark = `Discount: ₹${discount}, Outlet Discount: ₹${outletDiscount}, Order Total: ₹${orderTotal}`;
 
+    // ── Payment mode ──────────────────────────────────────────────────────
+    // "Cash On Delivery" / "COD" -> COD.  "Paid" / "Prepaid" / "Online" -> Prepaid.
+    const rawPay = (order.paymentTypeRaw || "").toLowerCase();
+    order.paymentType = /cash|cod/.test(rawPay) ? "COD" : "Prepaid";
+    delete order.paymentTypeRaw;
+
     return order;
   },
 };
 
 const matchers = [
   { match: "brotherbyte.com", name: "BrotherByte", type: "brotherbyte" },
-  { match: "1972vragrawal@gmail.com", name: "BrotherByte", type: "brotherbyte" },
 ];
 
 const type = "brotherbyte";
@@ -261,12 +273,14 @@ FIELD RULES:
              Do NOT use the part before the slash.
 - CUSTOMER:  "Customer" value is "Name (10-digit-phone)" → split into customerName and contactNo.
              e.g. "Kartik Sharma (7669828991)" → customerName="Kartik Sharma", contactNo="7669828991".
-- TRAIN:     "Train" value kept as-is, e.g. "12909/NZM GARIB RATH".
+- TRAIN:     "Train" value → use ONLY the train NUMBER (digits before "/"), drop the train name.
+             e.g. "12909/NZM GARIB RATH" → trainInfo="12909".
 - COACH:     "Coach & Berth" value kept as-is, e.g. "G16/48".
 - DATE/TIME: "Delivery Date & ETA" format is MM-DD-YYYY HH:MM IST (month-first, NOT day-first).
              → deliveryDate=YYYY-MM-DD, deliveryTime=HH:MM.
              e.g. "09-01-2026 22:19 IST" → deliveryDate=2026-09-01, deliveryTime=22:19.
-- PAYMENT:   "Payment Method" value: "Cash On Delivery" → COD; anything else → Prepaid.
+- PAYMENT:   "Payment Method" value: "Cash On Delivery" / "COD" → COD.
+             "Paid" / "Prepaid" / "Online" → Prepaid.
 - TOTAL:     Use "Amount to Collect" as totalAmount (final payable amount, e.g. 331).
              "Order Total" is the gross total before outlet discount — do not use it as totalAmount.
 - TAX:       "GST/Tax" value → tax.
