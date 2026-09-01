@@ -45,6 +45,7 @@ const travelkhana = require('./travelkhana');
 const jaipurrasoionrails = require('./jaipurrasoionrails');
 const railrestro  = require('./railrestro');
 const olf         = require('./olf');
+const brotherbyte = require('./brotherbyte');
 const generic     = require('./generic');
 
 const vendors = [
@@ -65,6 +66,7 @@ const vendors = [
   railrestro,
   jaipurrasoionrails,
   olf,
+  brotherbyte,
   generic,
 ];
 
