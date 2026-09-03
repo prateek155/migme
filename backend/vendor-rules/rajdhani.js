@@ -220,6 +220,7 @@ const domConfig = {
 const matchers = [
   { match: 'rajdhaniorder@gmail.com', name: 'Rajdhani Online Food', type: 'rajdhani' },
   { match: 'rajdhani',                name: 'Rajdhani Online Food', type: 'rajdhani' },
+  { match: '1972vragrawal@gmail.com', name: 'Rajdhani Online Food', type: 'rajdhani' },
 ];
 
 const type = 'rajdhani';
