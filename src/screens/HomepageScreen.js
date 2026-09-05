@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
   Linking,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -59,6 +60,51 @@ const faqs = [
   ['Can the team export records?', 'Yes. You can export order records by vendor, status or date range for reporting and accounting work.'],
 ];
 
+const NAV_ITEMS = [
+  { label: 'Overview', key: 'overview' },
+  { label: 'Workflow', key: 'workflow' },
+  { label: 'Features', key: 'features' },
+  { label: 'Vendors', key: 'vendors' },
+  { label: 'FAQ', key: 'faq' },
+];
+
+const stats = [
+  { icon: 'box', value: '5000+', label: 'Monthly Order Processing' },
+  { icon: 'list', value: '11000+', label: 'Saved Orders' },
+  { icon: 'target', value: '90%', label: 'Business Automation' },
+];
+
+const PRIVACY_SECTIONS = [
+  ['Introduction', 'This Privacy Policy explains how Imperiial ("Imperiial", "we", "us" or "our"), the company that owns and operates Migme (the "Service"), collects, uses, discloses and safeguards information when a business ("Customer", "you") connects its order inbox to Migme or otherwise uses the Service. By using Migme, you agree to the practices described in this Policy.'],
+  ['Information We Collect', 'We collect account information you provide when you sign up (such as name, business name, email address and phone number), the vendor order emails your connected mailbox receives, and metadata generated while you use the dashboard, such as search queries, exported reports and login activity.'],
+  ['Order Email Processing', 'When you connect an order inbox, Migme reads incoming vendor emails solely to identify and extract order-related details, such as vendor name, train or route number, item, quantity, customer details and delivery information, and to convert them into structured records inside your dashboard. Migme does not use the content of your connected mailbox for advertising or sell it to third parties.'],
+  ['How We Use Information', 'We use collected information to operate and improve the Service, parse and organise order emails, generate the dashboard and exports, respond to support requests, send service-related communications, and to detect and prevent duplicate, fraudulent or unsafe activity.'],
+  ['Sharing of Information', 'We do not sell personal information. We may share information with sub-processors who host our infrastructure or provide email-parsing and analytics tooling, strictly to operate the Service and only under confidentiality obligations. We may also disclose information if required by law, regulation or a valid legal process.'],
+  ['Data Security', 'We apply reasonable administrative, technical and physical safeguards to protect the information in our systems, including encryption in transit, restricted access and routine monitoring. No method of transmission or storage is completely secure, so we cannot guarantee absolute security.'],
+  ['Data Retention', 'We retain order records and account information for as long as your account is active or as needed to provide the Service, comply with legal obligations, resolve disputes and enforce our agreements. You may request deletion of your data, subject to any legal retention requirements.'],
+  ['Your Rights', 'Depending on your location, you may have rights to access, correct, export or delete the personal information we hold about you, or to withdraw consent for certain processing. To exercise these rights, contact us using the details below.'],
+  ['Cookies & Analytics', 'Our website and dashboard may use cookies or similar technologies to keep you signed in, remember preferences and understand how the Service is used, so we can improve it.'],
+  ["Children's Privacy", 'Migme is a business tool and is not directed at, or intended for use by, individuals under the age of 18. We do not knowingly collect personal information from children.'],
+  ['Changes to This Policy', 'We may update this Privacy Policy from time to time. We will post the revised version on this page with an updated "Last updated" date, and material changes will be communicated to registered account holders.'],
+  ['Contact Us', 'For any questions about this Privacy Policy or how your data is handled, contact Imperiial at +91 9175185122 / +91 7627073230, or visit imperiial.tech.'],
+];
+
+const TERMS_SECTIONS = [
+  ['Acceptance of Terms', 'These Terms & Conditions ("Terms") govern access to and use of Migme, a SaaS product owned and operated by Imperiial ("Imperiial", "we", "us"). By creating an account or using the Service, you agree to be bound by these Terms. If you do not agree, do not use Migme.'],
+  ['Description of the Service', 'Migme connects to an order inbox designated by the Customer, reads incoming vendor order emails, extracts structured order data, and presents it through a searchable dashboard with review flags and export tools.'],
+  ['Account Registration', 'You must provide accurate, current information when creating an account and are responsible for maintaining the confidentiality of your login credentials and for all activity that occurs under your account.'],
+  ['Vendor Email Access & Data Processing', 'By connecting a mailbox or alias, you authorise Migme to access and process the order-related emails delivered to that inbox for the sole purpose of providing the Service. You confirm that you are authorised to grant this access and that doing so does not violate any agreement you have with your vendors or email provider.'],
+  ['Acceptable Use', 'You agree not to use Migme to process unlawful content, to interfere with or disrupt the Service, to attempt to gain unauthorised access to any part of the Service, or to reverse engineer or resell the Service without our written consent.'],
+  ['Subscription, Fees & Payment', 'Access to paid features is subject to the subscription plan you select. Fees are billed in advance on a recurring basis unless stated otherwise, and are non-refundable except where required by law. We may change our pricing with prior notice.'],
+  ['Intellectual Property', 'Migme, including its software, design, branding and underlying technology, is the property of Imperiial and is protected by applicable intellectual property laws. These Terms do not grant you any ownership rights in the Service.'],
+  ['Data Accuracy Disclaimer', 'Migme extracts data from emails using automated parsing. While we aim for high accuracy, vendor emails may be incomplete, inconsistent or use unfamiliar formats; Migme flags such orders for manual review but cannot guarantee that every extracted field is error-free. You remain responsible for verifying critical order details before acting on them.'],
+  ['Limitation of Liability', 'To the fullest extent permitted by law, Imperiial will not be liable for any indirect, incidental or consequential damages, or for any loss of profits, data or business arising from your use of, or inability to use, Migme.'],
+  ['Termination', 'We may suspend or terminate access to the Service if these Terms are violated, or if required to comply with law. You may stop using the Service and close your account at any time.'],
+  ['Governing Law', 'These Terms are governed by the laws of India, without regard to conflict-of-law principles, and any disputes will be subject to the exclusive jurisdiction of the competent courts in India, unless otherwise required by applicable law.'],
+  ['Changes to These Terms', 'We may revise these Terms from time to time. Continued use of Migme after changes take effect constitutes acceptance of the revised Terms.'],
+  ['Contact Us', 'Questions about these Terms can be directed to Imperiial at +91 9175185122 / +91 7627073230, or via imperiial.tech.'],
+];
+
 export default function MigmeLandingNative({ onLogin, onSignup }) {
   const { width } = useWindowDimensions();
   const screen = useMemo(() => getScreen(width), [width]);
@@ -66,16 +112,33 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
   const isTwoCol = width >= 760;
   const flowSize = width < 480 ? 'sm' : width < 900 ? 'md' : 'lg';
 
+  const scrollRef = useRef(null);
+  const sectionOffsets = useRef({});
+  const [modalContent, setModalContent] = useState(null); // 'privacy' | 'terms' | null
+
+  const registerSection = (key) => (e) => {
+    sectionOffsets.current[key] = e.nativeEvent.layout.y;
+  };
+
+  const scrollToSection = (key) => {
+    const y = sectionOffsets.current[key];
+    if (scrollRef.current && typeof y === 'number') {
+      scrollRef.current.scrollTo({ y: Math.max(y - 20, 0), animated: true });
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView style={styles.page} contentContainerStyle={styles.pageContent}>
+      <ScrollView ref={scrollRef} style={styles.page} contentContainerStyle={styles.pageContent}>
         <View style={[styles.header, screen.wrap]}>
           <Brand />
           <View style={styles.headerRight}>
             {isWide ? (
               <View style={styles.nav}>
-                {['Overview', 'Workflow', 'Features', 'Vendors', 'FAQ'].map((item) => (
-                  <Text key={item} style={styles.navText}>{item}</Text>
+                {NAV_ITEMS.map((item) => (
+                  <Pressable key={item.key} onPress={() => scrollToSection(item.key)}>
+                    <Text style={styles.navText}>{item.label}</Text>
+                  </Pressable>
                 ))}
               </View>
             ) : null}
@@ -86,7 +149,10 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
           </View>
         </View>
 
-        <View style={[screen.wrap, styles.hero, isWide ? styles.heroWide : styles.heroStack]}>
+        <View
+          style={[screen.wrap, styles.hero, isWide ? styles.heroWide : styles.heroStack]}
+          onLayout={registerSection('overview')}
+        >
           <View style={styles.heroCopy}>
             <Eyebrow>Order inbox to operating dashboard</Eyebrow>
             <Text style={[styles.display, screen.display]}>Migme keeps every train food order in one clean view.</Text>
@@ -107,6 +173,8 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
           <FlowDiagram size={flowSize} />
         </View>
 
+        <StatsSection wrapStyle={screen.wrap} isTwoCol={isTwoCol} small={width < 480} />
+
         <Section background="mist">
           <View style={[screen.wrap, isTwoCol ? styles.twoCol : styles.stackGap]}>
             <View>
@@ -124,7 +192,7 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
           </View>
         </Section>
 
-        <Section>
+        <Section onLayout={registerSection('workflow')}>
           <View style={screen.wrap}>
             <Eyebrow>Workflow</Eyebrow>
             <Text style={[styles.h2, screen.h2]}>Four steps from incoming mail to a live order board.</Text>
@@ -142,7 +210,7 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
           </View>
         </Section>
 
-        <Section background="mist">
+        <Section background="mist" onLayout={registerSection('features')}>
           <View style={screen.wrap}>
             <Eyebrow>Built for daily order handling</Eyebrow>
             <Text style={[styles.h2, screen.h2]}>Everything your team needs after the email arrives.</Text>
@@ -160,7 +228,7 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
           </View>
         </Section>
 
-        <Section>
+        <Section onLayout={registerSection('vendors')}>
           <View style={[screen.wrap, isTwoCol ? styles.twoCol : styles.stackGap]}>
             <View>
               <Eyebrow>Vendor coverage</Eyebrow>
@@ -179,7 +247,7 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
           </View>
         </Section>
 
-        <Section>
+        <Section onLayout={registerSection('faq')}>
           <View style={[screen.wrap, isTwoCol ? styles.twoCol : styles.stackGap]}>
             <View>
               <Eyebrow>Questions</Eyebrow>
@@ -210,8 +278,10 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
             <Text style={styles.footerText}>Train food order emails, parsed into one dashboard.</Text>
           </View>
           <View style={styles.footerLinks}>
-            {['Overview', 'Workflow', 'Features', 'Vendors', 'FAQ'].map((item) => (
-              <Text key={item} style={styles.footerLink}>{item}</Text>
+            {NAV_ITEMS.map((item) => (
+              <Pressable key={item.key} onPress={() => scrollToSection(item.key)}>
+                <Text style={styles.footerLink}>{item.label}</Text>
+              </Pressable>
             ))}
           </View>
           <View style={styles.footerContact}>
@@ -226,9 +296,39 @@ export default function MigmeLandingNative({ onLogin, onSignup }) {
         </View>
 
         <View style={[screen.wrap, styles.footerBottom]}>
-          <Text style={styles.footerBottomText}>Copyright 2026 Migme. All rights reserved.</Text>
+          <View style={[styles.footerBottomRow, !isWide && styles.footerBottomRowStack]}>
+            <Text style={styles.footerBottomText}>
+              © 2026 Imperiial. Migme is a SaaS product of Imperiial. All rights reserved.
+            </Text>
+            <View style={styles.legalLinks}>
+              <Pressable onPress={() => setModalContent('privacy')}>
+                <Text style={styles.legalLink}>Privacy Policy</Text>
+              </Pressable>
+              <Text style={styles.legalDot}>·</Text>
+              <Pressable onPress={() => setModalContent('terms')}>
+                <Text style={styles.legalLink}>Terms & Conditions</Text>
+              </Pressable>
+              <Text style={styles.legalDot}>·</Text>
+              <Pressable onPress={() => Linking.openURL('https://imperiial.tech')}>
+                <Text style={styles.legalLink}>imperiial.tech</Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       </ScrollView>
+
+      <LegalModal
+        visible={modalContent === 'privacy'}
+        title="Privacy Policy"
+        sections={PRIVACY_SECTIONS}
+        onClose={() => setModalContent(null)}
+      />
+      <LegalModal
+        visible={modalContent === 'terms'}
+        title="Terms & Conditions"
+        sections={TERMS_SECTIONS}
+        onClose={() => setModalContent(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -305,11 +405,87 @@ function MigmeButton({ label, onPress, inverse, large, compact, outline }) {
   );
 }
 
-function Section({ children, background }) {
+function Section({ children, background, onLayout }) {
   return (
-    <View style={[styles.section, background === 'mist' && styles.sectionMist]}>
+    <View style={[styles.section, background === 'mist' && styles.sectionMist]} onLayout={onLayout}>
       {children}
     </View>
+  );
+}
+
+function StatIcon({ type }) {
+  if (type === 'box') {
+    return (
+      <View style={styles.statIconBox}>
+        <View style={styles.statBoxLid} />
+      </View>
+    );
+  }
+  if (type === 'list') {
+    return (
+      <View style={styles.statIconList}>
+        <View style={styles.statListLine} />
+        <View style={styles.statListLine} />
+        <View style={styles.statListLineShort} />
+      </View>
+    );
+  }
+  if (type === 'target') {
+    return (
+      <View style={styles.statTargetOuter}>
+        <View style={styles.statTargetMid}>
+          <View style={styles.statTargetInner} />
+        </View>
+      </View>
+    );
+  }
+  return null;
+}
+
+function StatsSection({ wrapStyle, isTwoCol, small }) {
+  return (
+    <View style={[styles.statsSection, small && styles.statsSectionCompact]}>
+      <View style={[wrapStyle, styles.statsInner]}>
+        <Text style={[styles.statsHeading, small && styles.statsHeadingCompact]}>
+          Growing teams trust Migme to keep every order accounted for
+        </Text>
+        <View style={[styles.statsRow, !isTwoCol && styles.statsRowStack]}>
+          {stats.map((s) => (
+            <View key={s.label} style={styles.statItem}>
+              <StatIcon type={s.icon} />
+              <Text style={styles.statValue}>{s.value}</Text>
+              <Text style={styles.statLabel}>{s.label}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function LegalModal({ visible, title, sections, onClose }) {
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{title}</Text>
+            <Pressable onPress={onClose} style={styles.modalClose} accessibilityRole="button">
+              <Text style={styles.modalCloseText}>Close</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
+            <Text style={styles.modalUpdated}>Last updated: 6 September 2026</Text>
+            {sections.map(([heading, body]) => (
+              <View key={heading} style={styles.modalSection}>
+                <Text style={styles.modalSectionTitle}>{heading}</Text>
+                <Text style={styles.modalSectionText}>{body}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -847,6 +1023,123 @@ const styles = StyleSheet.create({
     fontSize: 12,
     flexShrink: 1,
   },
+  statsSection: {
+    backgroundColor: colors.stamp,
+    paddingVertical: 72,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  statsSectionCompact: {
+    paddingVertical: 52,
+  },
+  statsInner: {
+    alignItems: 'center',
+  },
+  statsHeading: {
+    color: colors.paper,
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : undefined,
+    fontSize: 22,
+    fontWeight: '600',
+    textAlign: 'center',
+    maxWidth: 700,
+    alignSelf: 'center',
+    marginBottom: 46,
+    lineHeight: 30,
+  },
+  statsHeadingCompact: {
+    fontSize: 18,
+    lineHeight: 25,
+    marginBottom: 34,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    flexWrap: 'wrap',
+    gap: 32,
+  },
+  statsRowStack: {
+    flexDirection: 'column',
+    alignItems: 'center',
+  },
+  statItem: {
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 150,
+  },
+  statValue: {
+    color: colors.paper,
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : undefined,
+    fontSize: 34,
+    fontWeight: '700',
+    marginTop: 16,
+    marginBottom: 6,
+  },
+  statLabel: {
+    color: '#B9B9B4',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 13,
+    textAlign: 'center',
+    letterSpacing: .4,
+  },
+  statIconBox: {
+    width: 42,
+    height: 42,
+    borderWidth: 1,
+    borderColor: colors.paper,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statBoxLid: {
+    width: 26,
+    height: 1,
+    backgroundColor: colors.paper,
+  },
+  statIconList: {
+    width: 42,
+    height: 42,
+    borderWidth: 1,
+    borderColor: colors.paper,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  statListLine: {
+    width: 22,
+    height: 1,
+    backgroundColor: colors.paper,
+  },
+  statListLineShort: {
+    width: 14,
+    height: 1,
+    backgroundColor: colors.paper,
+  },
+  statTargetOuter: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: colors.paper,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statTargetMid: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: colors.paper,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statTargetInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.paper,
+  },
   section: {
     paddingVertical: 96,
     borderTopWidth: 1,
@@ -1027,9 +1320,109 @@ const styles = StyleSheet.create({
     borderTopColor: colors.line,
     paddingVertical: 22,
   },
+  footerBottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  footerBottomRowStack: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
   footerBottomText: {
     color: colors.graphite,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     fontSize: 12,
+  },
+  legalLinks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  legalLink: {
+    color: colors.ink,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12,
+    textDecorationLine: 'underline',
+  },
+  legalDot: {
+    color: colors.line,
+    fontSize: 12,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(18,18,18,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 640,
+    maxHeight: '85%',
+    backgroundColor: colors.paper,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.ink,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  modalTitle: {
+    color: colors.ink,
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : undefined,
+    fontSize: 20,
+    fontWeight: '600',
+  },
+  modalClose: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  modalCloseText: {
+    color: colors.graphite,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  modalBody: {
+    paddingHorizontal: 20,
+  },
+  modalBodyContent: {
+    paddingVertical: 20,
+    paddingBottom: 36,
+  },
+  modalUpdated: {
+    color: colors.graphite,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 11,
+    letterSpacing: .5,
+    textTransform: 'uppercase',
+    marginBottom: 20,
+  },
+  modalSection: {
+    marginBottom: 22,
+  },
+  modalSectionTitle: {
+    color: colors.ink,
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : undefined,
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  modalSectionText: {
+    color: colors.graphite,
+    fontSize: 14,
+    lineHeight: 22,
   },
 });
